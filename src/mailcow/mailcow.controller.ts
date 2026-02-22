@@ -38,6 +38,7 @@ export class MailcowController {
     console.log('DTO', updateMailboxesDto);
     const data = await this.service.updateMailboxesQuota(
       updateMailboxesDto.quota,
+      updateMailboxesDto.masterMailServerDomain,
       updateMailboxesDto?.mailboxes,
       updateMailboxesDto?.domain,
     );
@@ -47,8 +48,14 @@ export class MailcowController {
 
   @UseGuards(AuthGuard)
   @Get()
-  async getMailboxes(@Query('domain') domain: string) {
-    const data = await this.service.getMailboxes(domain);
+  async getMailboxes(
+    @Query('domain') domain: string,
+    @Query('masterMailServerDomain') masterMailServerDomain: string,
+  ) {
+    const data = await this.service.getMailboxes(
+      domain,
+      masterMailServerDomain,
+    );
 
     return { status: 'success', data: data };
   }
@@ -69,10 +76,21 @@ export class MailcowController {
 
   @UseGuards(AuthGuard)
   @Post('domain/assign-transport')
-  async assignTransport(@Body() body: { domain: string; relayHostId: number }) {
-    const { domain, relayHostId } = body;
+  async assignTransport(
+    @Body()
+    body: {
+      domain: string;
+      relayHostId: number;
+      masterMailServerDomain: string;
+    },
+  ) {
+    const { domain, relayHostId, masterMailServerDomain } = body;
 
-    const result = await this.service.setDomainTransport(domain, relayHostId);
+    const result = await this.service.setDomainTransport(
+      domain,
+      relayHostId,
+      masterMailServerDomain,
+    );
 
     return {
       success: true,

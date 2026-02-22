@@ -9,6 +9,7 @@ import { DomainModule } from './domain/domain.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { ConfigModule } from '@nestjs/config';
+import { StripeModule } from './stripe/stripe.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ConfigModule } from '@nestjs/config';
     HetznerModule,
     LinodeModule,
     DomainModule,
+    StripeModule,
     AuthModule,
     ScheduleModule.forRoot(),
     ConfigModule.forRoot(),

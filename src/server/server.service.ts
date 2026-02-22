@@ -94,7 +94,7 @@ runcmd:
   - ufw --force enable
   # 4. Postfix Configuration
   - echo "postfix postfix/main_mailer_type string 'Internet Site'" | debconf-set-selections
-  - postconf -e "myhostname = ${myHostname}"
+  - postconf -e "myhostname = ${myHostname}.${myDomain}"
   - postconf -e "mydomain = ${myDomain}"
   - postconf -e "mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128 ${parentRelayIP}"
   - postconf -e "inet_protocols = ipv4"

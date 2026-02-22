@@ -82,10 +82,13 @@ export class HetznerService {
       });
       return response.data;
     } catch (error) {
-      console.log(error);
+      const message = error.response?.data?.error?.message || error.message;
       this.logger.error(
         `Failed to create zone: ${error.response?.data?.error?.message || error.message}`,
       );
+      if ((message as string).includes('Zone already exists')) {
+        return message;
+      }
       throw error;
     }
   }
@@ -93,7 +96,6 @@ export class HetznerService {
   async addDkimRecord(zoneName: string, selector: string, publicKey: string) {
     const url = `${this.API_URL}/${zoneName}/rrsets`;
     const formattedValue = formatDkimValue(`v=DKIM1; k=rsa; p=${publicKey}`);
-    console.log(formattedValue);
     let dkim_data = {
       name: `${selector}._domainkey`,
       type: 'TXT',
@@ -114,10 +116,13 @@ export class HetznerService {
 
       return response.data;
     } catch (error) {
-      console.log(error);
+      const message = error.response?.data?.error?.message || error.message;
       this.logger.error(
         `Failed to update zone: ${error.response?.data?.error?.message || error.message}`,
       );
+      if ((message as string).includes('RRSet(s) already exist(s)')) {
+        return message;
+      }
       throw error;
     }
   }

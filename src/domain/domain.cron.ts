@@ -29,7 +29,8 @@ export class DomainCronService {
     const { data: domains, error } = await client
       .from('domains')
       .select('id, domain')
-      .or('nameserver.is.null,nameserver.eq.false');
+      .or('nameserver.is.null,nameserver.eq.false')
+      .is('paid', true);
 
     if (error || !domains) {
       this.logger.error(error);

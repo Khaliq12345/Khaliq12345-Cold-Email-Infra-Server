@@ -11,7 +11,7 @@ export class LinodeCronService {
     private readonly service: LinodeService,
   ) {}
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async handleARecordProvisioning() {
     this.logger.log('Checking for relay servers needing A-records...');
 

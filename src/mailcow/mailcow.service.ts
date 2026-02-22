@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { SharedService } from 'src/shared/shared.service';
 
@@ -59,14 +58,85 @@ const generateStr = (len: number) =>
 @Injectable()
 export class MailcowService {
   private readonly logger = new Logger(MailcowService.name);
-  private readonly MAILCOW_API_BASE: string =
-    'https://mail.theonebilliontech.org/api/v1';
-  private readonly token: string;
-  constructor(
-    private readonly supabase: SharedService,
-    private readonly configService: ConfigService,
-  ) {
-    this.token = this.configService.get('MAILCOW_API_KEY') as string;
+
+  constructor(private readonly supabase: SharedService) {}
+
+  async getApiKey(masterMailServerDomain: string) {
+    this.logger.log(
+      `Retrieving api keys for domain - ${masterMailServerDomain}`,
+    );
+    const { data, error } = await this.supabase
+      .SupabaseClient()
+      .from('master_mail_servers')
+      .select('api_key')
+      .eq('domain', masterMailServerDomain)
+      .single();
+    if (error) {
+      throw error;
+    }
+    return data.api_key;
+  }
+
+  async getExistingEmails(domain: string) {
+    this.logger.log(`Retrieving existing emails of domain - ${domain}`);
+    const { data, error } = await this.supabase
+      .SupabaseClient()
+      .from('mailboxes')
+      .select('email, is_active')
+      .eq('domain', domain);
+
+    if (error) {
+      this.logger.error(`Error fetching existing emails: ${error.message}`);
+      return [];
+    }
+
+    return data;
+  }
+
+  async getMasterDomain(domain: string): Promise<string> {
+    this.logger.log(`Retrieving the master domain for - ${domain}`);
+
+    // 1. Execute query
+    const { data, error } = await this.supabase
+      .SupabaseClient()
+      .from('domains')
+      .select(
+        `
+        domain,
+        master_mail_servers (
+          domain
+        )
+      `,
+      )
+      .eq('domain', domain)
+      .single();
+
+    // Safeguard 1: Handle Database/Connection Errors immediately
+    if (error) {
+      const errorMsg = `Database error retrieving master domain for ${domain}: ${error.message}`;
+      this.logger.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    // Safeguard 2: Check if the domain itself exists in the table
+    if (!data) {
+      const errorMsg = `No record found for domain: ${domain}`;
+      this.logger.warn(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    let masterMailServerDomain = data.master_mail_servers as any;
+    masterMailServerDomain = Array.isArray(masterMailServerDomain)
+      ? masterMailServerDomain[0].domain
+      : masterMailServerDomain.domain;
+
+    if (!masterMailServerDomain) {
+      const errorMsg = `Domain ${domain} exists, but no master mail server is assigned to it.`;
+      this.logger.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    return masterMailServerDomain;
   }
 
   async createMailboxes(
@@ -75,10 +145,23 @@ export class MailcowService {
     lastName: string,
     total: number,
   ) {
-    const localparts = generateUniqueAlphaNames(firstName, lastName, total);
-    this.logger.log(localparts);
-    for (const localpart of localparts) {
-      console.log(`Processing localpart - ${localpart}`);
+    const allLocalparts = generateUniqueAlphaNames(firstName, lastName, total);
+
+    // 2. Fetch existing emails from Supabase to prevent duplicates
+    const existingEmails = await this.getExistingEmails(domain);
+
+    // 3. FILTER: Only keep localparts that don't exist in the DB yet
+    const localpartsToProcess = allLocalparts.filter((lp) => {
+      const fullEmail = `${lp}@${domain}`;
+      const dbRecord = existingEmails.find((rec) => rec.email === fullEmail);
+      return !dbRecord || dbRecord.is_active === false;
+    });
+
+    // Getting the master domain
+    const masterMailServerDomain = await this.getMasterDomain(domain);
+
+    for (const localpart of localpartsToProcess) {
+      this.logger.log(`Processing localpart - ${localpart}`);
       const fullEmail = `${localpart}@${domain}`;
       const password = generateStr(50);
       const payload = {
@@ -89,9 +172,9 @@ export class MailcowService {
         first_name: firstName,
         last_name: lastName,
         username: fullEmail,
-        imap_host: `mail.${domain}`,
+        imap_host: masterMailServerDomain,
         imap_port: '993',
-        smtp_host: `mail.${domain}`,
+        smtp_host: masterMailServerDomain,
         smtp_port: '465',
       };
 
@@ -99,7 +182,7 @@ export class MailcowService {
       const { data, error } = await this.supabase
         .SupabaseClient()
         .from('mailboxes')
-        .insert(payload)
+        .upsert(payload, { onConflict: 'email' })
         .select()
         .single();
 
@@ -111,9 +194,10 @@ export class MailcowService {
       this.logger.log('Sent to supaabse');
 
       // Send the mailcow
-
+      const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+      const token = await this.getApiKey(masterMailServerDomain);
       const response = await axios.post(
-        `${this.MAILCOW_API_BASE}/add/mailbox`,
+        `${MAILCOW_API_BASE}/add/mailbox`,
         {
           local_part: localpart,
           domain: domain,
@@ -129,7 +213,7 @@ export class MailcowService {
         {
           headers: {
             'Content-Type': 'application/json',
-            'X-API-Key': this.token,
+            'X-API-Key': token,
           },
         },
       );
@@ -158,6 +242,7 @@ export class MailcowService {
 
   async updateMailboxesQuota(
     quota: number,
+    masterMailServerDomain: string,
     mailboxes?: string,
     domain?: string,
   ) {
@@ -165,14 +250,17 @@ export class MailcowService {
     let splittedMailboxes = mailboxes ? mailboxes.split(';') : [];
     if (splittedMailboxes.length == 0 && domain) {
       this.logger.log('Fallback to getting all the domains');
-      splittedMailboxes = (await this.getMailboxes(domain)).map(
-        (record: any) => record.username as string,
-      );
+      splittedMailboxes = (
+        await this.getMailboxes(domain, masterMailServerDomain)
+      ).map((record: any) => record.username as string);
     }
 
     // Send the requests to update the mailboxes quota
+
+    const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+    const token = await this.getApiKey(masterMailServerDomain);
     const response = await axios.post(
-      `${this.MAILCOW_API_BASE}/edit/mailbox`,
+      `${MAILCOW_API_BASE}/edit/mailbox`,
       {
         items: splittedMailboxes,
         attr: { quota: quota },
@@ -180,7 +268,7 @@ export class MailcowService {
       {
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': this.token,
+          'X-API-Key': token,
         },
       },
     );
@@ -188,19 +276,27 @@ export class MailcowService {
     return response.data;
   }
 
-  async getMailboxes(domain: string): Promise<Object[]> {
+  async getMailboxes(
+    domain: string,
+    masterMailServerDomain: string,
+  ): Promise<Object[]> {
     this.logger.log(`GETTING THE MAILBOXES OF ${domain}`);
+
+    const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+    const token = await this.getApiKey(masterMailServerDomain);
     const response = await axios.get(
-      `${this.MAILCOW_API_BASE}/get/mailbox/all`,
+      `${MAILCOW_API_BASE}/get/mailbox/all`,
 
       {
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': this.token,
+          'X-API-Key': token,
         },
       },
     );
-    const records = response.data.filter((record) => record.domain == domain);
+    const records = response.data.filter(
+      (record: any) => record.domain == domain,
+    );
     return records;
   }
 
@@ -211,8 +307,9 @@ export class MailcowService {
   ): Promise<any> {
     this.logger.log(`CREATING MAILCOW DOMAIN: ${domainName}`);
 
-    const url = `${this.MAILCOW_API_BASE}/add/domain`;
-
+    const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+    const url = `${MAILCOW_API_BASE}/add/domain`;
+    const token = await this.getApiKey(masterMailServerDomain);
     const body = {
       domain: domainName,
       description: description,
@@ -233,7 +330,7 @@ export class MailcowService {
       const response = await axios.post(url, body, {
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': this.token,
+          'X-API-Key': token,
         },
       });
 
@@ -246,10 +343,16 @@ export class MailcowService {
     }
   }
 
-  async setDomainTransport(domain: string, relayHostId: number): Promise<any> {
+  async setDomainTransport(
+    domain: string,
+    relayHostId: number,
+    masterMailServerDomain: string,
+  ): Promise<any> {
     this.logger.log(`ASSIGNING RELAY ID ${relayHostId} TO DOMAIN ${domain}`);
     try {
-      const url = `${this.MAILCOW_API_BASE}/edit/domain`;
+      const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+      const token = await this.getApiKey(masterMailServerDomain);
+      const url = `${MAILCOW_API_BASE}/edit/domain`;
 
       const body = {
         attr: {
@@ -261,7 +364,7 @@ export class MailcowService {
       const response = await axios.post(url, body, {
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': this.token,
+          'X-API-Key': token,
         },
       });
 
@@ -278,7 +381,8 @@ export class MailcowService {
     const { data, error } = await client
       .from('mailboxes')
       .select('*')
-      .eq('domain', domain);
+      .eq('domain', domain)
+      .is('is_active', true);
 
     if (error) {
       this.logger.error(

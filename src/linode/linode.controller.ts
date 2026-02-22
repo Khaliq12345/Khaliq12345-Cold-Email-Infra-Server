@@ -2,6 +2,7 @@ import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AddArecordDto } from './addArecord.dto';
 import { LinodeService } from './linode.service';
 import { AuthGuard } from 'src/auth/auth.guard';
+import { createSupportTicketDto } from './create-support.dto';
 
 @Controller('linode')
 export class LinodeController {
@@ -21,6 +22,16 @@ export class LinodeController {
         status: 'success',
         details: response,
       };
+    } catch (error) {
+      return error.message;
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('support/ticket')
+  async openTicket(@Body() body: createSupportTicketDto) {
+    try {
+      this.service.openSupportTicket(body.linodeId, body.domain);
     } catch (error) {
       return error.message;
     }

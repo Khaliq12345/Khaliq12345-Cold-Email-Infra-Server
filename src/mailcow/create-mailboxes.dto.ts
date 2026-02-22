@@ -3,4 +3,5 @@ export class CreateMailboxesDto {
   firstName: string;
   lastName: string;
   total: number;
+  masterMailServerDomain: string;
 }

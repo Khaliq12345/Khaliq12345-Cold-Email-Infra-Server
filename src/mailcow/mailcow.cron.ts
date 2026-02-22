@@ -98,7 +98,7 @@ export class MailcowCronService {
     const { data: domains, error } = await client
       .from('domains')
       .select(
-        'id,domain,relay_servers(ipaddress, master_relay_servers(mailcow_relay_id))',
+        'id,domain,relay_servers(ipaddress, master_relay_servers(mailcow_relay_id), master_mail_servers(domain))',
       )
       .or('mailcow_relay_set.is.null,mailcow_relay_set.eq.false')
       .is('mailcow_domain_created', true);
@@ -115,15 +115,22 @@ export class MailcowCronService {
         // 1. Safely extract values using optional chaining
         const relay = record.relay_servers?.[0];
         const masterRelayServer = relay?.master_relay_servers as any;
+        const masterMailServer = relay?.master_mail_servers as any;
 
         const masterRelayId = Array.isArray(masterRelayServer)
           ? masterRelayServer[0]?.mailcow_relay_id
           : masterRelayServer?.mailcow_relay_id;
 
+        const masterMailDomain = Array.isArray(masterMailServer)
+          ? masterMailServer[0]?.domain
+          : masterMailServer?.domain;
+
+        this.logger.log(masterMailDomain);
+
         // 3. Validation: Only proceed if we have the required data
-        if (!masterRelayId) {
+        if (!masterRelayId || !masterMailDomain) {
           this.logger.warn(
-            `Skipping Relay setup for ${record.domain}: Master Relay Server Id.`,
+            `Skipping Relay setup for ${record.domain}: Master Relay Server Id or Master Mail Server Domain is not available`,
           );
           return; // Skip this iteration
         }
@@ -137,6 +144,7 @@ export class MailcowCronService {
         const response = await this.service.setDomainTransport(
           record.domain,
           masterRelayId,
+          masterMailDomain,
         );
 
         if (response?.errors || response?.error) {

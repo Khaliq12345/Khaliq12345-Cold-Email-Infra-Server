@@ -1,7 +1,10 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   InternalServerErrorException,
+  Param,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -31,5 +34,39 @@ export class DomainController {
     } catch (error) {
       throw new InternalServerErrorException('Could not retrieve domains');
     }
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('check-availability')
+  async checkAvailability(@Query('domain') domain: string) {
+    if (!domain) {
+      throw new BadRequestException('Domain name is required');
+    }
+
+    const isRegistered = await this.service.isDomainRegistered(domain);
+
+    return {
+      domain: domain,
+      available: !isRegistered, // If it's not registered, it's available
+      message: isRegistered
+        ? 'Domain is already registered on the internet.'
+        : 'Domain appears to be available.',
+    };
+  }
+
+  @UseGuards(AuthGuard)
+  @Get(':domain')
+  async getUserDomain(@Param('domain') domain: string) {
+    try {
+      return await this.service.getDomainDetails(domain);
+    } catch (error) {
+      throw new InternalServerErrorException('Could not retrieve domains');
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('stats/:username')
+  async getUserStats(@Param('username') username: string) {
+    return await this.service.getDomainStatsByUser(username);
   }
 }
