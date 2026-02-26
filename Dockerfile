@@ -37,6 +37,7 @@ ENV ANSIBLE_HOST_KEY_CHECKING=False
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY configure_dkim.yaml ./
 
 # Ensure the node user can write to /tmp for our dynamic files
 RUN chmod 777 /tmp
