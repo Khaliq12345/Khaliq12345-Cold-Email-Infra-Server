@@ -12,7 +12,7 @@ export class MailcowCronService {
     private readonly service: MailcowService,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleMailcowDomainCreation() {
     this.logger.log('Checking for domains needing Mailcow initialization...');
 
@@ -93,7 +93,7 @@ export class MailcowCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleMailcowRelaySetup() {
     this.logger.log('Checking for domains needing Mailcow Relay Host setup...');
 

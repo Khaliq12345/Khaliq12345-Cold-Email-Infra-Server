@@ -22,7 +22,7 @@ export class DomainCronService {
 
   constructor(private readonly service: SharedService) {}
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'verify-domain-nameservers',
   })
   async handleNameserverPolling() {

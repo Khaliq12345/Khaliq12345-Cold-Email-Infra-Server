@@ -15,7 +15,7 @@ export class ServerCronService {
     @InjectQueue('dkim-provisioning') private dkimQueue: Queue,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'matching-domains-to-servers' })
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'matching-domains-to-servers' })
   async matchDomainsToServers() {
     this.logger.log(
       'Checking for verified domains needing server assignment...',
@@ -108,7 +108,7 @@ export class ServerCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'sync-server-status',
   })
   async syncServerStatuses() {
@@ -164,7 +164,7 @@ export class ServerCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleReverseDnsConfiguration() {
     this.logger.log('Checking for relay servers needing Reverse DNS...');
 

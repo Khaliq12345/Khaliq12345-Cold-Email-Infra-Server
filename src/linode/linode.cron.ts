@@ -11,7 +11,7 @@ export class LinodeCronService {
     private readonly service: LinodeService,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleARecordProvisioning() {
     this.logger.log('Checking for relay servers needing A-records...');
 
@@ -73,7 +73,7 @@ export class LinodeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'provisioning-basic-dns',
   })
   async handleBasicDnsProvisioning() {
@@ -163,7 +163,7 @@ export class LinodeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleDkimDnsProvisioning() {
     this.logger.log('Checking for domains needing DKIM DNS records...');
 
