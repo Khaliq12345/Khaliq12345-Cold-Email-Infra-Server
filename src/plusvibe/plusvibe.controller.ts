@@ -31,7 +31,6 @@ export class PlusvibeController {
   async addMailboxesToWorkspace(
     @Body() addMailboxesToWorkspaceDto: AddMailboxesToWorkspaceDto,
   ) {
-    console.log(addMailboxesToWorkspaceDto);
     await this.service.sendMailboxesToWorkspace(
       addMailboxesToWorkspaceDto.domain,
       addMailboxesToWorkspaceDto.workspaceId,

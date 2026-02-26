@@ -67,7 +67,7 @@ export class PlusvibeCronService {
       .SupabaseClient()
       .from('domains')
       .select('domain, username, plusvibe_workspace')
-      .eq('paid', true)
+      .is('paid', true)
       .not('plusvibe_workspace', 'is', null);
 
     if (error) {

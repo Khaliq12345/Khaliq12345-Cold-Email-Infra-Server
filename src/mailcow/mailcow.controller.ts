@@ -22,14 +22,18 @@ export class MailcowController {
   @Post('create')
   @HttpCode(201)
   async createMailboxes(@Body() createMailboxesDto: CreateMailboxesDto) {
-    await this.service.createMailboxes(
-      createMailboxesDto.domain,
-      createMailboxesDto.firstName,
-      createMailboxesDto.lastName,
-      createMailboxesDto.total,
-    );
+    try {
+      await this.service.createMailboxes(
+        createMailboxesDto.domain,
+        createMailboxesDto.firstName,
+        createMailboxesDto.lastName,
+        createMailboxesDto.total,
+      );
 
-    return { status: 'success', details: 'mailboxes created' };
+      return { status: 'success', details: 'mailboxes created' };
+    } catch (error) {
+      return { status: 'failed', details: error };
+    }
   }
 
   @UseGuards(AuthGuard)

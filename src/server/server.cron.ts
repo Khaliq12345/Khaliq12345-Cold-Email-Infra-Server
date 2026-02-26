@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SharedService } from 'src/shared/shared.service';
 import { ServerService } from './server.service';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 @Injectable()
 export class ServerCronService {
@@ -10,97 +12,103 @@ export class ServerCronService {
   constructor(
     private readonly sharedservice: SharedService,
     private readonly service: ServerService,
+    @InjectQueue('dkim-provisioning') private dkimQueue: Queue,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE, {
-    name: 'creating-servers',
-  })
-  async provisionPendingServers() {
-    this.logger.log('Checking for verified domains needing servers...');
-
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'matching-domains-to-servers' })
+  async matchDomainsToServers() {
+    this.logger.log(
+      'Checking for verified domains needing server assignment...',
+    );
     const client = this.sharedservice.SupabaseClient();
+
+    // 1. Fetch domains that are verified but not yet assigned to a relay_server
     const { data: domains, error } = await client
       .from('domains')
-      .select('id, domain, username, relay_servers(server_name)')
-      .is('nameserver', true);
+      .select('id, domain, username')
+      .is('nameserver', true)
+      .is('paid', true)
+      .or(
+        'is_dkim_configured_in_server.is.null,is_dkim_configured_in_server.eq.false',
+      );
 
-    if (error || !domains) return;
+    if (error || !domains || domains.length === 0) return;
 
-    // 2. Filter domains that don't have a linked server record
-    const unprovisioned = domains.filter(
-      (d) => !d.relay_servers || d.relay_servers.length === 0,
-    );
-
-    if (unprovisioned.length === 0) {
-      this.logger.debug('No new servers to provision.');
-      return;
-    }
-
-    for (const record of unprovisioned) {
+    for (const record of domains) {
+      this.logger.log(`Domain - ${record.domain}`);
       try {
-        this.logger.log(`Provisioning server for ${record.domain}...`);
-
-        // 3. Call your existing server function
-        const { data: MasterRelayServers, error } = await client
-          .from('master_relay_servers')
-          .select('id, domain, ip_address, status, master_mail_servers(id)')
-          .eq('status', 'running');
-
-        if (
-          error ||
-          !MasterRelayServers ||
-          !MasterRelayServers[0].master_mail_servers
-        ) {
-          this.logger.warn('No relay server or mail server to use');
-          return;
-        }
-
-        const masterRelayServer = MasterRelayServers[0];
-        const masterMailServerId = (
-          masterRelayServer.master_mail_servers as any
-        ).id;
-        const relayHostName = `relay-${record.id}`;
-        const relayDomain = masterRelayServer.domain;
-        const mailDomain = record.domain;
-        const parentRelayIp = masterRelayServer.ip_address;
-        const response = await this.service.createLinode(
-          relayHostName,
-          relayDomain,
-          mailDomain,
-          parentRelayIp,
+        // 2. Call the "Clash-Proof" SQL Function
+        let { data: assignedServerName, error: rpcError } = await client.rpc(
+          'assign_server_to_domain',
+          {
+            p_domain_name: record.domain,
+            p_username: record.username,
+          },
         );
 
-        // 4. Record the creation in the 'servers' table to prevent duplicates
-        const { data: creationData, error: creationError } = await client
-          .from('relay_servers')
-          .insert([
-            {
-              server_name: `ubuntu-${relayHostName}`,
-              server_id: response.id,
-              ipaddress: response.ipv4[0], // assuming your function returns this
-              status: 'pending',
-              hostname: relayHostName,
-              master_mail_server: masterMailServerId,
-              master_relay_server: masterRelayServer.id,
-              domain: record.domain,
-            },
-          ]);
+        if (rpcError) throw new Error(rpcError.message);
 
-        if (creationError) {
-          this.logger.error(
-            `Error updating supabase - ${creationError.message}`,
+        if (assignedServerName) {
+          this.logger.log(
+            `✅ [MATCHED] ${record.domain} -> ${assignedServerName}`,
           );
-          return;
-        }
 
-        this.logger.log(`Successfully created server for ${record.domain}`);
+          // 3. TRIGGER ANSIBLE: Now that the DB is updated, run the DKIM setup
+          this.logger.log(`📥 Queuing DKIM setup for ${record.domain}`);
+
+          // Add to queue
+          await this.dkimQueue.add(
+            'setup-job',
+            {
+              domainName: record.domain,
+              serverName: assignedServerName,
+            },
+            {
+              attempts: 3, // Retry if SSH fails
+              backoff: 5000, // Wait 5s between retries
+            },
+          );
+        } else {
+          // 4. TRIGGER CREATION: No capacity found in existing/fresh servers
+          this.logger.warn(
+            `⚠️ [POOL EMPTY] No capacity for ${record.domain}. Scale the infrastructure...`,
+          );
+          // const { data, error } = await client
+          //   .from('master_relay_servers')
+          //   .select('*')
+          //   .eq('status', 'running')
+          //   .single();
+          //
+          // if (error || !data) {
+          //   this.logger.error(
+          //     'Error getting the master relay or no active master found',
+          //   );
+          //   throw error || new Error('No active master relay configuration');
+          // }
+          //
+          // const { data: nextId, error: seqError } =
+          //   await client.rpc('get_next_relay_id');
+          //
+          // if (seqError) throw seqError;
+          //
+          // // 2. Format the short, clean label
+          // const uniqueLabel = `relay-${nextId}`;
+          //
+          // // Logic to trigger the new Linode creation since the DB function returned NULL
+          // await this.service.createLinode(
+          //   uniqueLabel,
+          //   data.domain,
+          //   data.ip_address,
+          // );
+          // this.logger.log(`Provisioning started for new relay server`);
+        }
       } catch (e) {
-        this.logger.error(`Failed to provision ${record.domain}: ${e.message}`);
+        this.logger.error(`Failed to process ${record.domain}: ${e.message}`);
       }
     }
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES, {
+  @Cron(CronExpression.EVERY_MINUTE, {
     name: 'sync-server-status',
   })
   async syncServerStatuses() {
@@ -140,7 +148,7 @@ export class ServerCronService {
           await client
             .from('relay_servers')
             .update({
-              status: 'running',
+              status: 'awaiting_manual_review',
             })
             .eq('server_name', server.server_name);
 

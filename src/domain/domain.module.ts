@@ -9,5 +9,6 @@ import { AuthModule } from 'src/auth/auth.module';
   imports: [SharedModule, AuthModule],
   providers: [DomainService, DomainCronService],
   controllers: [DomainController],
+  exports: [DomainService],
 })
 export class DomainModule {}

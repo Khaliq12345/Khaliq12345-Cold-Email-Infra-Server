@@ -18,14 +18,21 @@ export class MailcowCronService {
 
     const client = this.sharedservice.SupabaseClient();
 
-    // 1. Fetch domains where mailcow_domain_created is false or null
-    // We also fetch the related mail server info which is often needed for the API call
+    // 1. Updated Select: Pull master_mail_servers directly from the domains table
     const { data: domains, error } = await client
       .from('domains')
       .select(
-        'id, domain, mailcow_domain_created, relay_servers(ipaddress, master_mail_servers(domain))',
+        `
+      id, 
+      domain, 
+      mailcow_domain_created, 
+      master_mail_servers(domain)
+    `,
       )
-      .or('mailcow_domain_created.is.null,mailcow_domain_created.eq.false');
+      .is('paid', true)
+      .is('is_dkim_set', true)
+      .or('mailcow_domain_created.is.null,mailcow_domain_created.eq.false')
+      .not('master_mail_server', 'is', null);
 
     if (error) {
       this.logger.error(`Supabase Error: ${error.message}`);
@@ -37,48 +44,47 @@ export class MailcowCronService {
     for (const record of domains) {
       try {
         this.logger.log(`Creating Mailcow domain for ${record.domain}`);
-        const relay = record.relay_servers?.[0];
-        const masterMailServer = relay?.master_mail_servers as any;
 
-        // 2. Handle the "Array vs Object" response from Supabase
-        const masterMailDomain = Array.isArray(masterMailServer)
-          ? masterMailServer[0]?.domain
-          : masterMailServer?.domain;
+        // 2. Direct Extraction: Get the Master Domain from the top-level record
+        const masterData = Array.isArray(record.master_mail_servers)
+          ? record.master_mail_servers[0]
+          : record.master_mail_servers;
 
-        // 3. Validation: Only proceed if we have the required data
+        const masterMailDomain = masterData?.domain;
+
+        // 3. Validation
         if (!masterMailDomain) {
           this.logger.warn(
-            `Skipping DNS setup for ${record.domain}: Master Mail Domain.`,
+            `Skipping ${record.domain}: No Master Mail Server domain found.`,
           );
-          return; // Skip this iteration
+          continue; // Move to next record
         }
 
-        // 2. Call your Mailcow creation function
+        // 4. API Call: Create the domain in the specific Mailcow instance
         const response = await this.service.createDomain(
           masterMailDomain,
           record.domain,
         );
 
-        if (response?.errors || response?.error) {
+        // Handle specific Mailcow API response formats
+        if (response?.errors || response?.error || !response) {
           this.logger.error(
-            `Mailcow API Error for ${record.domain}: ${JSON.stringify(response)}`,
+            `Mailcow API Error for ${record.domain}: ${JSON.stringify(response || 'No response')}`,
           );
           continue;
         }
 
-        if (response) {
-          // 3. Update DB upon success
-          const { error: updateError } = await client
-            .from('domains')
-            .update({ mailcow_domain_created: true })
-            .eq('id', record.id);
+        // 5. Update DB upon success
+        const { error: updateError } = await client
+          .from('domains')
+          .update({ mailcow_domain_created: true })
+          .eq('id', record.id);
 
-          if (!updateError) {
-            this.logger.log(
-              `✅ Mailcow domain created successfully for ${record.domain}`,
-            );
-          }
-        }
+        if (updateError) throw updateError;
+
+        this.logger.log(
+          `✅ Mailcow domain created successfully for ${record.domain}`,
+        );
       } catch (e) {
         this.logger.error(
           `Failed to process Mailcow for ${record.domain}: ${e.message}`,
@@ -93,13 +99,21 @@ export class MailcowCronService {
 
     const client = this.sharedservice.SupabaseClient();
 
-    // 1. Fetch domains where relay is not yet set
-    // We need the hostname of the relay server to set as the transport
+    // 1. Fetch domains
     const { data: domains, error } = await client
       .from('domains')
       .select(
-        'id,domain,relay_servers(ipaddress, master_relay_servers(mailcow_relay_id), master_mail_servers(domain))',
+        `
+      id,
+      domain,
+      relay_servers (
+        ipaddress,
+        master_relay_servers ( mailcow_relay_id )
+      ),
+      master_mail_servers ( domain )
+    `,
       )
+      .is('paid', true)
       .or('mailcow_relay_set.is.null,mailcow_relay_set.eq.false')
       .is('mailcow_domain_created', true);
 
@@ -112,65 +126,70 @@ export class MailcowCronService {
 
     for (const record of domains) {
       try {
-        // 1. Safely extract values using optional chaining
-        const relay = record.relay_servers?.[0];
-        const masterRelayServer = relay?.master_relay_servers as any;
-        const masterMailServer = relay?.master_mail_servers as any;
+        // 2. Extracting nested data safely
+        const relay = Array.isArray(record.relay_servers)
+          ? record.relay_servers[0]
+          : record.relay_servers;
 
-        const masterRelayId = Array.isArray(masterRelayServer)
-          ? masterRelayServer[0]?.mailcow_relay_id
-          : masterRelayServer?.mailcow_relay_id;
+        const masterRelayData = Array.isArray(relay?.master_relay_servers)
+          ? relay?.master_relay_servers[0]
+          : relay?.master_relay_servers;
 
-        const masterMailDomain = Array.isArray(masterMailServer)
-          ? masterMailServer[0]?.domain
-          : masterMailServer?.domain;
+        const masterMailData = Array.isArray(record.master_mail_servers)
+          ? record.master_mail_servers[0]
+          : record.master_mail_servers;
 
-        this.logger.log(masterMailDomain);
+        const masterRelayId = masterRelayData?.mailcow_relay_id;
+        const masterMailDomain = masterMailData?.domain;
 
-        // 3. Validation: Only proceed if we have the required data
+        // 3. Validation
         if (!masterRelayId || !masterMailDomain) {
           this.logger.warn(
-            `Skipping Relay setup for ${record.domain}: Master Relay Server Id or Master Mail Server Domain is not available`,
+            `Skipping ${record.domain}: Missing MasterRelayId (${masterRelayId}) or MasterMailDomain (${masterMailDomain})`,
           );
-          return; // Skip this iteration
+          continue; // ❗ Use 'continue' to move to the next domain, NOT 'return'
         }
 
         this.logger.log(
-          `Setting Relay Host for ${record.domain} to relay host - ${masterRelayId}`,
+          `🚀 Setting Relay Host for ${record.domain} to ID: ${masterRelayId}`,
         );
 
-        // 2. Call your Mailcow function to add the Relay Host
-        // This typically maps the domain to a specific transport host
+        // 4. Call Mailcow API
         const response = await this.service.setDomainTransport(
           record.domain,
           masterRelayId,
           masterMailDomain,
         );
 
-        if (response?.errors || response?.error) {
+        // Mailcow API typically returns an array of status objects
+        const hasError = Array.isArray(response)
+          ? response.some((r) => r.type === 'error')
+          : response?.errors || response?.error;
+
+        if (hasError) {
           this.logger.error(
-            `Mailcow Relay Error for ${record.domain}: ${JSON.stringify(response)}`,
+            `❌ Mailcow API Rejected ${record.domain}: ${JSON.stringify(response)}`,
           );
           continue;
         }
 
-        if (response) {
-          // 3. Update DB
-          const { error: updateError } = await client
-            .from('domains')
-            .update({ mailcow_relay_set: true })
-            .eq('id', record.id);
+        // 5. Update Database upon success
+        const { error: updateError } = await client
+          .from('domains')
+          .update({ mailcow_relay_set: true })
+          .eq('id', record.id);
 
-          if (!updateError) {
-            this.logger.log(
-              `✅ Mailcow Relay Host configured for ${record.domain}`,
-            );
-          }
+        if (updateError) {
+          this.logger.error(
+            `⚠️ DB Update Failed for ${record.domain}: ${updateError.message}`,
+          );
+        } else {
+          this.logger.log(
+            `✅ Mailcow Relay Host configured for ${record.domain}`,
+          );
         }
       } catch (e) {
-        this.logger.error(
-          `Exception during Relay Host setup for ${record.domain}: ${e.message}`,
-        );
+        this.logger.error(`💥 Exception for ${record.domain}: ${e.message}`);
       }
     }
   }

@@ -37,7 +37,6 @@ export class ServerController {
     const response = await this.serverService.createLinode(
       createServerDto.relayHostname,
       createServerDto.relayDomain,
-      createServerDto.mailDomain,
       createServerDto.parentRelayIp,
     );
 

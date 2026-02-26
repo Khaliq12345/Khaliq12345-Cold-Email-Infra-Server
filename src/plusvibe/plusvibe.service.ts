@@ -211,7 +211,6 @@ export class PlusvibeService {
     );
 
     const credential = await this.getPlusVibeCredentials(domain, username);
-    this.logger.log(credential);
     const instance = axios.create({
       baseURL: this.apiBaseUrl,
       headers: {

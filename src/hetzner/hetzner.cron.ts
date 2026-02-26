@@ -12,7 +12,7 @@ export class HetznerCronService {
     private readonly service: HetznerService,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_YEAR, {
     name: 'provisioning-basic-dns',
   })
   async handleBasicDnsProvisioning() {
@@ -20,13 +20,22 @@ export class HetznerCronService {
 
     const client = this.sharedservice.SupabaseClient();
 
-    // 1. Fetch domains where basic_dns is false or null
+    // 1. Updated Select: Pull master_mail_servers directly from domains
+    // Note: relay_servers is still likely a 1-to-1 or 1-to-many join
     const { data: domains, error } = await client
       .from('domains')
       .select(
-        'id, domain, username, basic_dns, relay_servers(ipaddress, master_mail_servers(*))',
+        `
+        id, 
+        domain, 
+        username, 
+        basic_dns, 
+        relay_servers(ipaddress), 
+        master_mail_servers(domain)
+      `,
       )
-      .or('basic_dns.is.null,basic_dns.eq.false');
+      .or('basic_dns.is.null,basic_dns.eq.false')
+      .is('paid', true);
 
     if (error) {
       this.logger.error(
@@ -43,57 +52,55 @@ export class HetznerCronService {
     for (const record of domains) {
       try {
         this.logger.log(`Setting up Basic DNS for: ${record.domain}`);
-        // 1. Safely extract values using optional chaining
-        // This handles cases where relay_servers might be an empty array []
-        const relay = record.relay_servers?.[0];
-        const masterMailServer = relay?.master_mail_servers as any;
 
-        // 2. Handle the "Array vs Object" response from Supabase
-        const masterMailDomain = Array.isArray(masterMailServer)
-          ? masterMailServer[0]?.domain
-          : masterMailServer?.domain;
+        // 2. Simplified Extraction: master_mail_servers is now a direct property of record
+        // Supabase joins return objects for single relationships (if defined correctly in DB)
+        // but we add a check just in case it returns an array.
+        const masterData = Array.isArray(record.master_mail_servers)
+          ? record.master_mail_servers[0]
+          : record.master_mail_servers;
 
-        const relayIp = relay?.ipaddress;
+        const masterMailDomain = masterData?.domain;
 
-        // 3. Validation: Only proceed if we have the required data
+        // Relay IP usually comes from an array in Supabase joins
+        const relayData = Array.isArray(record.relay_servers)
+          ? record.relay_servers[0]
+          : record.relay_servers;
+
+        const relayIp = relayData?.ipaddress;
+
+        // 3. Validation
         if (!masterMailDomain || !relayIp) {
           this.logger.warn(
-            `Skipping DNS setup for ${record.domain}: Missing Relay IP or Master Mail Domain.`,
+            `Skipping ${record.domain}: Missing Relay IP (${relayIp}) or Master Domain (${masterMailDomain}).`,
           );
-          return; // Skip this iteration
+          continue; // Use continue in a loop, not return
         }
 
-        // 4. Call the service with validated, typed data
+        // 4. API Call
         const response = await this.service.createZoneWithRecords(
           record.domain,
           masterMailDomain,
           relayIp,
         );
 
-        if (response?.errors) {
+        // Check for errors in your specific API implementation
+        if (response?.errors || !response) {
           this.logger.error(
-            `Failed to set Basic DNS for ${record.domain}: ${JSON.stringify(response.errors)}`,
+            `Failed to set Basic DNS for ${record.domain}: ${JSON.stringify(response?.errors || 'Unknown Error')}`,
           );
-          continue; // Move to the next domain instead of killing the whole loop
+          continue;
         }
 
-        if (response) {
-          // 3. Update DB only if the API call was successful
-          const { error: updateError } = await client
-            .from('domains')
-            .update({ basic_dns: true })
-            .eq('id', record.id);
+        // 5. Update DB
+        const { error: updateError } = await client
+          .from('domains')
+          .update({ basic_dns: true })
+          .eq('id', record.id);
 
-          if (!updateError) {
-            this.logger.log(
-              `✅ Basic DNS successfully set for ${record.domain}`,
-            );
-          } else {
-            this.logger.error(
-              `Database update failed for ${record.domain}: ${updateError.message}`,
-            );
-          }
-        }
+        if (updateError) throw updateError;
+
+        this.logger.log(`✅ Basic DNS successfully set for ${record.domain}`);
       } catch (e) {
         this.logger.error(
           `Exception during Basic DNS setup for ${record.domain}: ${e.message}`,
@@ -102,7 +109,7 @@ export class HetznerCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_YEAR)
   async handleDkimDnsProvisioning() {
     this.logger.log('Checking for domains needing DKIM DNS records...');
 
@@ -114,6 +121,7 @@ export class HetznerCronService {
       .select('id, domain, dkim_value, is_dkim_set')
       .not('dkim_value', 'is', null)
       .is('basic_dns', true)
+      .is('paid', true)
       .or('is_dkim_set.is.null,is_dkim_set.eq.false');
 
     if (error) {

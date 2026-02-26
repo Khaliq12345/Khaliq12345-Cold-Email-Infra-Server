@@ -1,0 +1,105 @@
+---
+- name: Domain and Relay Host Connection
+  hosts: all
+  become: true
+  vars:
+    # Passed from NestJS --extra-vars
+    mail_domain: "{{ target_domain }}"
+    dkim_private_key: "{{ injected_private_key }}"
+    parent_relay_ip: "{{ parent_relay_ip }}"
+    
+    selector: "relay"
+    dkim_dir: "/var/lib/opendkim/keys/{{ mail_domain }}"
+
+  tasks:
+    - name: Install required mail relay packages
+      ansible.builtin.apt:
+        name: [fail2ban, ufw, postfix, opendkim, opendkim-tools]
+        state: present
+        update_cache: yes
+
+    - name: Create DKIM directory for the new domain
+      ansible.builtin.file:
+        path: "{{ dkim_dir }}"
+        state: directory
+        owner: opendkim
+        group: opendkim
+        mode: '0700'
+
+    - name: Write Injected DKIM Private key
+      ansible.builtin.copy:
+        content: "{{ dkim_private_key }}"
+        dest: "{{ dkim_dir }}/{{ selector }}.private"
+        owner: opendkim
+        group: opendkim
+        mode: '0600'
+
+    - name: Update SigningTable (Additive)
+      ansible.builtin.lineinfile:
+        path: /etc/opendkim/SigningTable
+        line: "*@{{ mail_domain }} {{ selector }}._domainkey.{{ mail_domain }}"
+        create: yes
+        owner: opendkim
+        group: opendkim
+
+    - name: Update KeyTable (Additive)
+      ansible.builtin.lineinfile:
+        path: /etc/opendkim/KeyTable
+        line: "{{ selector }}._domainkey.{{ mail_domain }} {{ mail_domain }}:{{ selector }}:{{ dkim_dir }}/{{ selector }}.private"
+        create: yes
+        owner: opendkim
+        group: opendkim
+
+    - name: Update TrustedHosts (User Specific Block)
+      ansible.builtin.blockinfile:
+        path: /etc/opendkim/TrustedHosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK {{ mail_domain }}"
+        block: |
+          {{ mail_domain }}
+          *.{{ mail_domain }}
+        create: yes
+
+    - name: Ensure Infrastructure IPs are in TrustedHosts
+      ansible.builtin.lineinfile:
+        path: /etc/opendkim/TrustedHosts
+        line: "{{ item }}"
+        create: yes
+      loop:
+        - "127.0.0.1"
+        - "::1"
+        - "{{ parent_relay_ip }}"
+
+    - name: Maintain OpenDKIM Main Config (Idempotent)
+      ansible.builtin.copy:
+        dest: /etc/opendkim.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          Syslog            yes
+          SyslogSuccess     yes
+          LogWhy            yes
+          Canonicalization  relaxed/simple
+          Mode              sv
+          SubDomains        yes
+          OversignHeaders   From
+          UserID            opendkim
+          UMask             007
+          Socket            inet:8891@127.0.0.1
+          PidFile           /run/opendkim/opendkim.pid
+          TrustAnchorFile   /usr/share/dns/root.key
+          InternalHosts     refile:/etc/opendkim/TrustedHosts
+          KeyTable          refile:/etc/opendkim/KeyTable
+          SigningTable      refile:/etc/opendkim/SigningTable
+
+    # --- Forced Restarts Start Here ---
+
+    - name: Force Restart OpenDKIM
+      ansible.builtin.service:
+        name: opendkim
+        state: restarted
+
+    - name: Force Restart Postfix
+      ansible.builtin.service:
+        name: postfix
+        state: restarted

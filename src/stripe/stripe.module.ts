@@ -3,11 +3,11 @@ import { ConfigModule } from '@nestjs/config';
 import { StripeService } from './stripe.service';
 import { StripeController } from './stripe.controller';
 import { SharedModule } from 'src/shared/shared.module';
+import { DomainModule } from 'src/domain/domain.module';
 
 @Module({
-  imports: [ConfigModule, SharedModule],
+  imports: [ConfigModule, SharedModule, DomainModule],
   controllers: [StripeController],
   providers: [StripeService],
-  exports: [StripeService],
 })
 export class StripeModule {}

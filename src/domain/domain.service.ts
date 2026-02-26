@@ -7,96 +7,41 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SharedService } from 'src/shared/shared.service';
-import { promisify } from 'util';
-import * as whois from 'whois';
+import * as dns from 'dns';
 
 @Injectable()
 export class DomainService {
   private readonly logger = new Logger(DomainService.name);
-  // Convert callback-based whois.lookup to a Promise-based function
-  private lookupPromise = promisify(whois.lookup);
 
   constructor(private readonly service: SharedService) {}
 
   async addDomain(username: string, domain: string) {
     const supabase = this.service.SupabaseClient();
 
-    // 0. Fetch all servers currently marked as 'running'
-    const { data: masterServers, error: masterErrors } = await supabase
-      .from('master_mail_servers')
-      .select('domain, status, id')
-      .eq('status', 'running');
+    // Call the RPC function we just created
+    const { data, error } = await supabase.rpc(
+      'assign_master_mail_server_to_domain',
+      {
+        p_username: username,
+        p_domain: domain,
+      },
+    );
 
-    if (masterErrors) {
-      this.logger.error(
-        `Failed to fetch master servers: ${masterErrors.message}`,
-      );
-      throw new InternalServerErrorException(masterErrors.message);
-    }
+    if (error) {
+      this.logger.error(`Failed to add domain via RPC: ${error.message}`);
 
-    if (!masterServers || masterServers.length === 0) {
-      throw new BadRequestException('No running mail servers available.');
-    }
-
-    let selectedServerDomainId = null;
-    let currentCount = 0;
-
-    // 1. Loop through servers to find the first one with space
-    for (const server of masterServers) {
-      const { count, error: countError } = await supabase
-        .from('domains')
-        .select('*', { count: 'exact', head: true })
-        .eq('master_mail_server', server.id);
-
-      if (countError || count === null || count === undefined) continue;
-
-      if (count < 10) {
-        selectedServerDomainId = server.id;
-        currentCount = count;
-        break; // Found an available server, exit loop
-      } else {
-        // 2. Self-healing: If we find a server at 10 but status is still 'running', update it to 'filled'
-        await supabase
-          .from('master_mail_servers')
-          .update({ status: 'filled' })
-          .eq('domain', server.domain);
+      // Distinguish between business logic errors and server errors
+      if (error.message.includes('No running mail servers')) {
+        throw new BadRequestException(error.message);
       }
+
+      throw new InternalServerErrorException(error.message);
     }
 
-    if (!selectedServerDomainId) {
-      throw new BadRequestException(
-        'All running servers are currently filled (10/10 domains).',
-      );
-    }
-
-    // 3. Insert the new domain into the selected server
-    const { data, error: insertError } = await supabase
-      .from('domains')
-      .insert([
-        {
-          username,
-          domain,
-          master_mail_server: selectedServerDomainId,
-        },
-      ])
-      .select()
-      .single();
-
-    if (insertError) {
-      throw new InternalServerErrorException(insertError.message);
-    }
-
-    // 4. Final check: If this was the 10th domain, update server status to 'filled'
-    if (currentCount + 1 === 10) {
-      await supabase
-        .from('master_mail_servers')
-        .update({ status: 'filled' })
-        .eq('id', selectedServerDomainId);
-
-      this.logger.log(`Master server is now marked as filled.`);
-    }
-
-    return { ...data, master_server: selectedServerDomainId };
+    this.logger.log(
+      `Domain ${domain} successfully linked to server ${data.master_server}`,
+    );
+    return data;
   }
 
   async getDomainsByUser(username: string) {
@@ -140,36 +85,24 @@ export class DomainService {
   }
 
   async isDomainRegistered(domain: string): Promise<boolean> {
-    this.logger.log(`Performing WHOIS lookup for: ${domain}`);
-
     try {
-      const data: any = await this.lookupPromise(domain);
-
-      const notFoundExpressions = [
-        'No match for',
-        'NOT FOUND',
-        'Not Registered',
-        'No Data Found',
-        'available for purchase',
-      ];
-
-      const isNotFound = notFoundExpressions.some((expression) =>
-        data.toLowerCase().includes(expression.toLowerCase()),
-      );
-
-      // If we DID NOT find "Not Found" messages, the domain is taken.
-      const isRegistered = !isNotFound;
-
-      this.logger.debug(
-        `WHOIS result for ${domain}: ${isRegistered ? 'TAKEN' : 'AVAILABLE'}`,
-      );
-      return isRegistered;
+      // it's more "forgiving" of DNS configuration errors
+      await dns.promises.lookup(domain);
+      return true;
     } catch (error) {
-      this.logger.error(`WHOIS Error for ${domain}: ${error.message}`);
-      // If WHOIS fails (e.g., rate limited), we might want to fallback or throw
-      throw new InternalServerErrorException(
-        'Could not verify domain availability',
-      );
+      // If lookup fails, try a direct NS (Nameserver) query
+      // This catches domains that are registered but have no 'A' record (no website)
+      try {
+        const ns = await dns.promises.resolveNs(domain);
+        return ns.length > 0;
+      } catch (nsError) {
+        // If we get ENOTFOUND, it's definitely available.
+        // If we get ESERVFAIL, the domain exists but its DNS is broken.
+        if (nsError.code === 'ENOTFOUND') return false;
+        if (nsError.code === 'ESERVFAIL') return true; // Broken DNS usually means it's registered
+
+        return false;
+      }
     }
   }
 

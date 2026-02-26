@@ -1,8 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { writeFileSync } from 'fs';
 import * as crypto from 'crypto';
 import { SharedService } from 'src/shared/shared.service';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execPromise = promisify(exec);
 
 function generateDkimKeyPair() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
@@ -12,7 +16,7 @@ function generateDkimKeyPair() {
       format: 'pem',
     },
     privateKeyEncoding: {
-      type: 'pkcs8',
+      type: 'pkcs1',
       format: 'pem',
     },
   });
@@ -32,11 +36,11 @@ function getCloudInitScript(
   myHostname: string,
   myDomain: string,
   parentRelayIP: string,
-  mailDomain: string,
-  selector: string,
-  dkimPrivateKey: string,
+  // mailDomain: string,
+  // selector: string,
+  // dkimPrivateKey: string,
 ) {
-  const dkimDir = '/var/lib/opendkim';
+  // const dkimDir = '/var/lib/opendkim';
   const script = `#cloud-config
 package_update: true
 package_upgrade: true
@@ -46,27 +50,7 @@ packages:
   - postfix
   - opendkim
   - opendkim-tools
-write_files:
-  # Files created as root:root with default 0644 permissions
-  - path: ${dkimDir}/${selector}.private
-    content: |
-${dkimPrivateKey
-  .split('\n')
-  .map((line) => '      ' + line)
-  .join('\n')}
-  - path: /etc/opendkim/SigningTable
-    content: |
-      *@${mailDomain} ${selector}._domainkey.${mailDomain}
-  - path: /etc/opendkim/KeyTable
-    content: |
-      ${selector}._domainkey.${mailDomain} ${mailDomain}:${selector}:${dkimDir}/${selector}.private
-  - path: /etc/opendkim/TrustedHosts
-    content: |
-      127.0.0.1
-      ::1
-      ${mailDomain}
-      *.${mailDomain}
-      ${parentRelayIP}
+
 users:
   - name: relay
     groups: sudo
@@ -75,13 +59,6 @@ users:
     ssh_authorized_keys:
       - ${sshPubKey}
 runcmd:
-  # 1. Handoff & Strict Permissions (Now that opendkim user exists)
-  - mkdir -p /etc/opendkim
-  - chown -R opendkim:opendkim /etc/opendkim
-  - chown -R opendkim:opendkim ${dkimDir}
-  - chmod 700 ${dkimDir}
-  - chmod 600 ${dkimDir}/${selector}.private
-  - chmod 644 /etc/opendkim/SigningTable /etc/opendkim/KeyTable /etc/opendkim/TrustedHosts
   # 2. SSH Hardening
   - sed -i 's/^#\\?Port 22$/Port ${sshPort}/' /etc/ssh/sshd_config
   - sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
@@ -104,25 +81,6 @@ runcmd:
   - postconf -e "non_smtpd_milters = inet:127.0.0.1:8891"
   - postconf -e "maillog_file = /var/log/mail.log"
   - bash -c 'touch /var/log/mail.log && chown syslog:adm /var/log/mail.log'
-  # 5. Opendkim Config - Fixed to avoid leading whitespace
-  - |
-    cat > /etc/opendkim.conf <<'EOF'
-    Syslog		yes
-    SyslogSuccess		yes
-    LogWhy		yes
-    Canonicalization	relaxed/simple
-    Mode			sv
-    SubDomains		yes
-    OversignHeaders	From
-    UserID		opendkim
-    UMask			007
-    Socket		inet:8891@127.0.0.1
-    PidFile		/run/opendkim/opendkim.pid
-    TrustAnchorFile	/usr/share/dns/root.key
-    InternalHosts         refile:/etc/opendkim/TrustedHosts
-    KeyTable              refile:/etc/opendkim/KeyTable
-    SigningTable          refile:/etc/opendkim/SigningTable
-    EOF
   # 6. Final Service Restart
   - systemctl enable fail2ban
   - systemctl restart fail2ban
@@ -142,6 +100,8 @@ export class ServerService {
   private readonly baseUrl: string;
   private readonly sshKey: string;
   private readonly customPassword: string;
+  private readonly ansibleInventoryContent: string;
+  private readonly AnsibleSSHKeyContent: string;
   private readonly availableRegions = [
     'us-mia',
     'us-sea',
@@ -158,6 +118,88 @@ export class ServerService {
     this.baseUrl = this.configService.get('LINODE_BASE_URL') as string;
     this.sshKey = this.configService.get('SSH_KEY') as string;
     this.customPassword = this.configService.get('CUSTOM_PASSWORD') as string;
+    this.ansibleInventoryContent = this.configService.get(
+      'ANSIBLE_INVENTORY_CONTENT',
+    ) as string;
+    this.AnsibleSSHKeyContent = this.configService.get(
+      'ANSIBLE_SSH_KEY_CONTENT',
+    ) as string;
+  }
+
+  async assignAndSetupDkim(domainName: string, relayServerName: string) {
+    const client = this.sharedService.SupabaseClient();
+
+    // 1. Fetch the Target Server IP and the Parent (Master) Relay IP
+    const { data: serverInfo, error: serverErr } = await client
+      .from('relay_servers')
+      .select(
+        `
+        ipaddress,
+        master_relay_servers (
+          ip_address
+        )
+      `,
+      )
+      .eq('server_name', relayServerName)
+      .single();
+
+    if (serverErr || !serverInfo) {
+      console.error(
+        `Failed to fetch IP info for ${relayServerName}:`,
+        serverErr,
+      );
+      throw serverErr;
+    }
+
+    const targetRelayIp = serverInfo.ipaddress;
+    const parentRelayIp = (serverInfo.master_relay_servers as any)?.ip_address;
+
+    // 2. Generate keys locally
+    const { publicKey, privateKey } = generateDkimKeyPair();
+
+    // 3. Save publicKey to Supabase so user sees DNS instructions immediately
+    const { error: updateErr } = await client
+      .from('domains')
+      .update({ dkim_value: publicKey })
+      .eq('domain', domainName);
+
+    if (updateErr) {
+      console.error(`Failed to update DKIM for ${domainName}:`, updateErr);
+      throw updateErr;
+    }
+
+    // 4. Run Ansible with dynamic IPs
+    const extraVars = {
+      target_domain: domainName,
+      injected_private_key: privateKey,
+      parent_relay_ip: parentRelayIp, // Now dynamic!
+    };
+
+    const inventoryPath = '/tmp/hosts.yaml';
+    writeFileSync(inventoryPath, this.ansibleInventoryContent);
+
+    const keyPath = '/tmp/ansible_id_rsa';
+    writeFileSync(keyPath, this.AnsibleSSHKeyContent, { encoding: 'utf8' });
+
+    // Ensure we use a JSON string for the extra-vars to handle the multiline private key
+    const command = `ansible-playbook -i ${inventoryPath} configure_dkim.yaml --limit ${targetRelayIp} --extra-vars '${JSON.stringify(extraVars)}'`;
+
+    this.logger.log(
+      `🚀 Starting Ansible for ${domainName} on ${targetRelayIp}...`,
+    );
+
+    try {
+      const { stdout, stderr } = await execPromise(command);
+
+      this.logger.log(`✅ Ansible Success for ${domainName}:\n`, stdout);
+      return stdout;
+    } catch (err) {
+      this.logger.error(
+        `❌ Ansible Failed for ${domainName}:`,
+        err.stderr || err.message,
+      );
+      throw new Error(`Ansible execution failed: ${err.message}`);
+    }
   }
 
   async getLinodesTypes() {
@@ -177,31 +219,8 @@ export class ServerService {
   async createLinode(
     relayHostname: string,
     relayDomain: string,
-    mailDomain: string,
     parentRelayIp: string,
   ) {
-    // Generate the DKIM Key pair locally
-    const { publicKey, privateKey } = generateDkimKeyPair();
-
-    const updateData = {
-      dkim_value: publicKey,
-    };
-    const { error } = await this.sharedService
-      .SupabaseClient()
-      .from('domains')
-      .update(updateData)
-      .eq('domain', mailDomain)
-      .select();
-    if (error) {
-      this.logger.error(
-        `Failed to update DKIM in DB for ${mailDomain}: ${error.message}`,
-      );
-      return;
-    } else {
-      this.logger.log(`✅ DKIM Public Key stored in DB for ${mailDomain}`);
-    }
-
-    // const uniqueId = crypto.randomBytes(4).toString('hex');
     const linodeConfig = {
       region:
         this.availableRegions[
@@ -218,9 +237,6 @@ export class ServerService {
           relayHostname,
           relayDomain,
           parentRelayIp,
-          mailDomain,
-          'relay',
-          privateKey,
         ),
       },
     };
@@ -239,6 +255,24 @@ export class ServerService {
 
     try {
       const response = await axios.request(options);
+
+      const { error: dbError } = await this.sharedService
+        .SupabaseClient()
+        .from('relay_servers')
+        .insert({
+          server_name: `ubuntu-${relayHostname}`,
+          server_id: response.data.id,
+          status: 'pending',
+          ipaddress: response.data.ipv4[0],
+          hostname: relayHostname,
+        });
+
+      // 2. Handle potential DB errors
+      if (dbError) {
+        this.logger.error(`Database insert failed: ${dbError.message}`);
+        throw dbError;
+      }
+
       return response.data;
     } catch (error) {
       const errorData = error.response?.data;

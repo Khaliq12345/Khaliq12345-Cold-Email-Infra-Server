@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { SharedService } from 'src/shared/shared.service';
+import http from 'http';
+import https from 'https';
 
 function generateUniqueAlphaNames(
   first: string,
@@ -188,7 +190,6 @@ export class MailcowService {
 
       if (error) {
         const errorMsg = `Failed to write to DB, skipping API for ${fullEmail}: ${error.message}`;
-        this.logger.log(errorMsg);
         throw Error(errorMsg);
       }
       this.logger.log('Sent to supaabse');
@@ -215,6 +216,9 @@ export class MailcowService {
             'Content-Type': 'application/json',
             'X-API-Key': token,
           },
+          timeout: 30000,
+          httpAgent: new http.Agent({ family: 4 }),
+          httpsAgent: new https.Agent({ family: 4 }),
         },
       );
 
@@ -336,6 +340,7 @@ export class MailcowService {
 
       return response.data;
     } catch (error) {
+      this.logger.error(error);
       this.logger.error(
         `Mailcow Create Domain Error: ${error.response?.data} || ${error.message}`,
       );

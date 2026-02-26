@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { DomainService } from 'src/domain/domain.service';
 import { SharedService } from 'src/shared/shared.service';
 import Stripe from 'stripe';
 
@@ -19,6 +20,7 @@ export class StripeService {
   constructor(
     private configService: ConfigService,
     private sharedService: SharedService,
+    private domainService: DomainService,
   ) {
     this.stripe = new Stripe(
       this.configService.get<string>('STRIPE_API_KEY') as string,
@@ -135,19 +137,20 @@ export class StripeService {
   }
 
   async markDomainsAsPaid(domains: string[], username: string) {
-    this.logger.log(`Upserting payment status for ${domains.length} domains`);
+    this.logger.log(`Processing payment status for ${domains.length} domains`);
 
-    // Transform the string array into an array of objects for Supabase
-    const upsertData = domains.map((domain) => ({
-      domain,
-      username,
-      paid: true,
-    }));
+    // 1. Ensure all domains exist first
+    for (const domain of domains) {
+      await this.domainService.addDomain(username, domain);
+    }
 
+    // 2. Perform a single bulk update for all domains in the array
     const { data, error } = await this.sharedService
       .SupabaseClient()
       .from('domains')
-      .upsert(upsertData, { onConflict: 'domain' })
+      .update({ paid: true })
+      .in('domain', domains)
+      .eq('username', username)
       .select();
 
     if (error) {
@@ -155,7 +158,9 @@ export class StripeService {
       throw error;
     }
 
-    this.logger.log(`Successfully processed ${data.length} domains.`);
+    this.logger.log(
+      `Successfully marked ${data?.length || 0} domains as paid.`,
+    );
     return data;
   }
 
