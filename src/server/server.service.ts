@@ -184,7 +184,7 @@ export class ServerService {
     chmodSync(keyPath, 0o600);
 
     // Ensure we use a JSON string for the extra-vars to handle the multiline private key
-    const command = `ansible-playbook -i ${inventoryPath} configure_dkim.yaml --limit ${targetRelayIp} --extra-vars '${JSON.stringify(extraVars)}'`;
+    const command = `ansible-playbook -vvv -i ${inventoryPath} configure_dkim.yaml --limit ${targetRelayIp} --extra-vars '${JSON.stringify(extraVars)}'`;
 
     this.logger.log(
       `🚀 Starting Ansible for ${domainName} on ${targetRelayIp}...`,
