@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
-import { writeFileSync } from 'fs';
+import { chmodSync, writeFileSync } from 'fs';
 import * as crypto from 'crypto';
 import { SharedService } from 'src/shared/shared.service';
 import { exec } from 'child_process';
@@ -180,6 +180,8 @@ export class ServerService {
 
     const keyPath = '/tmp/ansible_id_rsa';
     writeFileSync(keyPath, this.AnsibleSSHKeyContent, { encoding: 'utf8' });
+
+    chmodSync(keyPath, 0o600);
 
     // Ensure we use a JSON string for the extra-vars to handle the multiline private key
     const command = `ansible-playbook -i ${inventoryPath} configure_dkim.yaml --limit ${targetRelayIp} --extra-vars '${JSON.stringify(extraVars)}'`;
