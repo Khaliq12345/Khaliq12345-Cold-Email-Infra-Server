@@ -118,12 +118,12 @@ export class ServerService {
     this.baseUrl = this.configService.get('LINODE_BASE_URL') as string;
     this.sshKey = this.configService.get('SSH_KEY') as string;
     this.customPassword = this.configService.get('CUSTOM_PASSWORD') as string;
-    this.ansibleInventoryContent = this.configService.get(
-      'ANSIBLE_INVENTORY_CONTENT',
-    ) as string;
-    this.AnsibleSSHKeyContent = this.configService.get(
-      'ANSIBLE_SSH_KEY_CONTENT',
-    ) as string;
+    this.ansibleInventoryContent = this.configService
+      .get('ANSIBLE_INVENTORY_CONTENT')
+      .replace(/\\n/g, '\n') as string;
+    this.AnsibleSSHKeyContent = this.configService
+      .get('ANSIBLE_SSH_KEY_CONTENT')
+      .replace(/\\n/g, '\n') as string;
   }
 
   async assignAndSetupDkim(domainName: string, relayServerName: string) {
@@ -177,9 +177,11 @@ export class ServerService {
 
     const inventoryPath = '/tmp/hosts.yaml';
     writeFileSync(inventoryPath, this.ansibleInventoryContent);
+    this.logger.log(this.ansibleInventoryContent);
 
     const keyPath = '/tmp/ansible_id_rsa';
     writeFileSync(keyPath, this.AnsibleSSHKeyContent, { encoding: 'utf8' });
+    this.logger.log(this.AnsibleSSHKeyContent);
 
     chmodSync(keyPath, 0o600);
 
