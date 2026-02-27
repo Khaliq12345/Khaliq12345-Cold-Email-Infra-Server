@@ -15,7 +15,7 @@ export class ServerCronService {
     @InjectQueue('dkim-provisioning') private dkimQueue: Queue,
   ) {}
 
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'matching-domains-to-servers' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'matching-domains-to-servers' })
   async matchDomainsToServers() {
     this.logger.log(
       'Checking for verified domains needing server assignment...',
@@ -68,39 +68,12 @@ export class ServerCronService {
               backoff: 5000, // Wait 5s between retries
             },
           );
+          break
         } else {
           // 4. TRIGGER CREATION: No capacity found in existing/fresh servers
           this.logger.warn(
             `⚠️ [POOL EMPTY] No capacity for ${record.domain}. Scale the infrastructure...`,
           );
-          // const { data, error } = await client
-          //   .from('master_relay_servers')
-          //   .select('*')
-          //   .eq('status', 'running')
-          //   .single();
-          //
-          // if (error || !data) {
-          //   this.logger.error(
-          //     'Error getting the master relay or no active master found',
-          //   );
-          //   throw error || new Error('No active master relay configuration');
-          // }
-          //
-          // const { data: nextId, error: seqError } =
-          //   await client.rpc('get_next_relay_id');
-          //
-          // if (seqError) throw seqError;
-          //
-          // // 2. Format the short, clean label
-          // const uniqueLabel = `relay-${nextId}`;
-          //
-          // // Logic to trigger the new Linode creation since the DB function returned NULL
-          // await this.service.createLinode(
-          //   uniqueLabel,
-          //   data.domain,
-          //   data.ip_address,
-          // );
-          // this.logger.log(`Provisioning started for new relay server`);
         }
       } catch (e) {
         this.logger.error(`Failed to process ${record.domain}: ${e.message}`);

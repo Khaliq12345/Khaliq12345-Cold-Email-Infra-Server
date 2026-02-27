@@ -30,6 +30,9 @@ import { BullModule } from '@nestjs/bullmq';
     }),
     BullModule.registerQueue({
       name: 'dkim-provisioning',
+      defaultJobOptions: {
+        removeOnComplete: true,
+      },
     }),
   ],
 })

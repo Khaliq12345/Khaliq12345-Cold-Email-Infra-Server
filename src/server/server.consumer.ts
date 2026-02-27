@@ -5,7 +5,7 @@ import { SharedService } from 'src/shared/shared.service';
 import { ServerService } from './server.service';
 
 @Processor('dkim-provisioning', {
-  concurrency: 2,
+  concurrency: 10,
 })
 export class DkimProvisioningConsumer extends WorkerHost {
   private readonly logger = new Logger(DkimProvisioningConsumer.name);

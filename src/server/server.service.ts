@@ -100,8 +100,10 @@ export class ServerService {
   private readonly baseUrl: string;
   private readonly sshKey: string;
   private readonly customPassword: string;
-  private readonly ansibleInventoryContent: string;
-  private readonly AnsibleSSHKeyContent: string;
+  private readonly PROJECT_ID: number;
+  private readonly TEMPLATE_ID: number;
+  private readonly SEMAPHORE_URL: string;
+  private readonly SEMAPHORE_API_TOKEN: string;
   private readonly availableRegions = [
     'us-mia',
     'us-sea',
@@ -109,6 +111,9 @@ export class ServerService {
     'us-lax',
     'us-west',
   ];
+
+  private sleep = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
 
   constructor(
     private readonly sharedService: SharedService,
@@ -118,12 +123,75 @@ export class ServerService {
     this.baseUrl = this.configService.get('LINODE_BASE_URL') as string;
     this.sshKey = this.configService.get('SSH_KEY') as string;
     this.customPassword = this.configService.get('CUSTOM_PASSWORD') as string;
-    this.ansibleInventoryContent = this.configService
-      .get('ANSIBLE_INVENTORY_CONTENT')
-      .replace(/\\n/g, '\n') as string;
-    this.AnsibleSSHKeyContent = this.configService
-      .get('ANSIBLE_SSH_KEY_CONTENT')
-      .replace(/\\n/g, '\n') as string;
+    this.PROJECT_ID = 1;
+    this.TEMPLATE_ID = 1;
+    this.SEMAPHORE_URL = this.configService.get('SEMAPHORE_URL') as string;
+    this.SEMAPHORE_API_TOKEN = this.configService.get(
+      'SEMAPHORE_API_TOKEN',
+    ) as string;
+  }
+
+  async getSemaphoreTaskStatus(taskId: number) {
+    // Point to the specific Task ID to get its current status
+    const url = `${this.SEMAPHORE_URL}/api/project/${this.PROJECT_ID}/tasks/${taskId}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.SEMAPHORE_API_TOKEN}`,
+        },
+      });
+      return response.data;
+    } catch (error) {
+      this.logger.error(
+        `❌ Failed to fetch task status for ID ${taskId}: ${error.response?.data?.message || error.message}`,
+      );
+      throw error;
+    }
+  }
+
+  async triggerDkimSetup(
+    targetIp: string,
+    domain: string,
+    privateKey: string,
+    parentRelayIp: string,
+  ) {
+    const url = `${this.SEMAPHORE_URL}/api/project/${this.PROJECT_ID}/tasks`;
+
+    const payload = {
+      template_id: Number(this.TEMPLATE_ID),
+      debug: true,
+      dry_run: false,
+      diff: false,
+      limit: targetIp,
+      environment: JSON.stringify({
+        target_domain: domain,
+        injected_private_key: privateKey,
+        parent_relay_ip: parentRelayIp,
+      }),
+      message: `Provisioning DKIM for ${domain} via NestJS API`,
+    };
+
+    try {
+      const response = await axios.post(url, payload, {
+        headers: {
+          Authorization: `bearer ${this.SEMAPHORE_API_TOKEN}`,
+          'Content-Type': 'application/json',
+          accept: 'application/json',
+        },
+      });
+      this.logger.log(
+        `🚀 Semaphore Task Queued: ID ${response.data.id} for ${domain}`,
+      );
+      return response.data;
+    } catch (error) {
+      const errorMsg = error.response?.data
+        ? JSON.stringify(error.response.data)
+        : error.message;
+      this.logger.error(`❌ Failed to trigger Semaphore: ${errorMsg}`);
+      throw error;
+    }
   }
 
   async assignAndSetupDkim(domainName: string, relayServerName: string) {
@@ -168,41 +236,42 @@ export class ServerService {
       throw updateErr;
     }
 
-    // 4. Run Ansible with dynamic IPs
-    const extraVars = {
-      target_domain: domainName,
-      injected_private_key: privateKey,
-      parent_relay_ip: parentRelayIp, // Now dynamic!
-    };
-
-    const inventoryPath = '/tmp/hosts.yaml';
-    writeFileSync(inventoryPath, this.ansibleInventoryContent);
-    this.logger.log(this.ansibleInventoryContent);
-
-    const keyPath = '/tmp/ansible_id_rsa';
-    writeFileSync(keyPath, this.AnsibleSSHKeyContent, { encoding: 'utf8' });
-    this.logger.log(this.AnsibleSSHKeyContent);
-
-    chmodSync(keyPath, 0o600);
-
-    // Ensure we use a JSON string for the extra-vars to handle the multiline private key
-    const command = `ansible-playbook -vvv -i ${inventoryPath} configure_dkim.yaml --limit ${targetRelayIp} --extra-vars '${JSON.stringify(extraVars)}'`;
-
-    this.logger.log(
-      `🚀 Starting Ansible for ${domainName} on ${targetRelayIp}...`,
+    const task = await this.triggerDkimSetup(
+      targetRelayIp,
+      domainName,
+      privateKey,
+      parentRelayIp,
     );
+    const taskId = task.id;
+    this.logger.log(`⏳ Monitoring Task ID: ${taskId} for ${domainName}...`);
 
-    try {
-      const { stdout, stderr } = await execPromise(command);
+    // 2. Poll until finished
+    let status = 'pending';
+    let attempts = 0;
+    const maxAttempts = 30; // 30 * 5 seconds = 2.5 minutes timeout
 
-      this.logger.log(`✅ Ansible Success for ${domainName}:\n`, stdout);
-      return stdout;
-    } catch (err) {
+    while (
+      status !== 'success' &&
+      status !== 'error' &&
+      attempts < maxAttempts
+    ) {
+      await this.sleep(5000); // Wait 5 seconds between checks
+
+      const taskDetails = await this.getSemaphoreTaskStatus(taskId);
+      status = taskDetails.status;
+
+      this.logger.log(`🔄 Task ${taskId} Current Status: ${status}`);
+      attempts++;
+    }
+
+    if (status === 'success') {
+      this.logger.log(`✅ DKIM Provisioned successfully for ${domainName}`);
+      return { success: true, taskId };
+    } else {
       this.logger.error(
-        `❌ Ansible Failed for ${domainName}:`,
-        err.stderr || err.message,
+        `❌ Task ${taskId} failed or timed out with status: ${status}`,
       );
-      throw new Error(`Ansible execution failed: ${err.message}`);
+      throw new Error(`Ansible task failed: ${status}`);
     }
   }
 
