@@ -1,0 +1,29 @@
+---
+- name: Map Domain to a relay server in Master Relay
+  hosts: all
+  become: true
+  vars:
+    # These catch the values passed from your NestJS --extra-vars
+    mail_domain: "{{ target_domain }}"
+    relay_ip: "{{ relay_ip }}"
+
+  tasks:
+    - name: Add relay mapping to relay_by_sender file
+      ansible.builtin.lineinfile:
+        path: /etc/postfix/relay_by_sender
+        regexp: '^@{{ mail_domain | replace(".", "\\.") }}'
+        line: "@{{ mail_domain }}                     [{{ relay_ip }}]:25"
+        state: present
+        create: yes
+      notify: 
+        - Run postmap
+        - Restart postfix
+
+  handlers:
+    - name: Run postmap
+      ansible.builtin.command: postmap /etc/postfix/relay_by_sender
+
+    - name: Restart postfix
+      ansible.builtin.systemd:
+        name: postfix
+        state: restarted
