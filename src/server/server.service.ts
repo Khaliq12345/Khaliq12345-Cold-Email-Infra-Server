@@ -100,8 +100,8 @@ export class ServerService {
   private readonly baseUrl: string;
   private readonly sshKey: string;
   private readonly customPassword: string;
-  private readonly PROJECT_ID: number;
-  private readonly TEMPLATE_ID: number;
+  private readonly PROJECT_ID: string;
+  private readonly TEMPLATE_ID: string;
   private readonly SEMAPHORE_URL: string;
   private readonly SEMAPHORE_API_TOKEN: string;
   private readonly availableRegions = [
@@ -123,12 +123,15 @@ export class ServerService {
     this.baseUrl = this.configService.get('LINODE_BASE_URL') as string;
     this.sshKey = this.configService.get('SSH_KEY') as string;
     this.customPassword = this.configService.get('CUSTOM_PASSWORD') as string;
-    this.PROJECT_ID = 1;
-    this.TEMPLATE_ID = 1;
+    this.PROJECT_ID = this.configService.get('SEMAPHORE_PROJECT_ID') as string;
+    this.TEMPLATE_ID = this.configService.get(
+      'SEMAPHORE_TEMPLATE_ID',
+    ) as string;
     this.SEMAPHORE_URL = this.configService.get('SEMAPHORE_URL') as string;
     this.SEMAPHORE_API_TOKEN = this.configService.get(
       'SEMAPHORE_API_TOKEN',
     ) as string;
+    this.SEMAPHORE_URL = this.configService.get('SEMAPHORE_URL') as string;
   }
 
   async getSemaphoreTaskStatus(taskId: number) {

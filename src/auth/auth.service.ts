@@ -7,12 +7,18 @@ import {
 import { SharedService } from 'src/shared/shared.service';
 import { LoginDto } from 'src/auth/auth.login.dto';
 import { SignupDto } from 'src/auth/auth.signup.dto';
+import { ConfigService } from '@nestjs/config';
+import { ForgotPasswordDto } from './auth.forgot-password.dto';
+import { ResetPasswordDto } from './auth.reset-password.dto';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  constructor(private readonly sharedService: SharedService) {}
+  constructor(
+    private readonly sharedService: SharedService,
+    private configService: ConfigService,
+  ) {}
 
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
@@ -98,6 +104,60 @@ export class AuthService {
     return {
       message: 'Signup successful',
       user: authData.user,
+    };
+  }
+
+  async requestPasswordReset(forgotPasswordDto: ForgotPasswordDto) {
+    const { email } = forgotPasswordDto;
+    const client = this.sharedService.SupabaseClient();
+
+    // Supabase sends the email automatically based on your project settings
+    const { error } = await client.auth.resetPasswordForEmail(email, {
+      // This is the URL the user clicks in their email
+      redirectTo: `${this.configService.get('FRONTEND_BASE_URL')}/reset-password`,
+    });
+
+    if (error) {
+      this.logger.error(`Reset request failed for ${email}: ${error.message}`);
+      throw new BadRequestException(error.message);
+    }
+
+    return {
+      message: 'Password reset email sent successfully',
+    };
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const { password, accessToken, refreshToken } = resetPasswordDto;
+    const client = this.sharedService.SupabaseClient();
+
+    /* If you are passing a token (OTP) from the frontend, 
+       you must verify the session first.
+    */
+    if (accessToken) {
+      const { error: sessionError } = await client.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (sessionError) {
+        throw new UnauthorizedException('Invalid or expired reset token');
+      }
+    }
+
+    // Update the password for the currently authenticated user session
+    const { data, error } = await client.auth.updateUser({
+      password: password,
+    });
+
+    if (error) {
+      this.logger.error(`Password update failed: ${error.message}`);
+      throw new BadRequestException(error.message);
+    }
+
+    return {
+      message: 'Password has been updated successfully',
+      user: data.user,
     };
   }
 }
