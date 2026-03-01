@@ -1,12 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
-import { chmodSync, writeFileSync } from 'fs';
 import * as crypto from 'crypto';
 import { SharedService } from 'src/shared/shared.service';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execPromise = promisify(exec);
 
 function generateDkimKeyPair() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
@@ -36,9 +32,6 @@ function getCloudInitScript(
   myHostname: string,
   myDomain: string,
   parentRelayIP: string,
-  // mailDomain: string,
-  // selector: string,
-  // dkimPrivateKey: string,
 ) {
   // const dkimDir = '/var/lib/opendkim';
   const script = `#cloud-config
@@ -104,6 +97,7 @@ export class ServerService {
   private readonly TEMPLATE_ID: string;
   private readonly SEMAPHORE_URL: string;
   private readonly SEMAPHORE_API_TOKEN: string;
+  private readonly MASTER_MAP_TEMPLATE_ID: string;
   private readonly availableRegions = [
     'us-mia',
     'us-sea',
@@ -132,6 +126,9 @@ export class ServerService {
       'SEMAPHORE_API_TOKEN',
     ) as string;
     this.SEMAPHORE_URL = this.configService.get('SEMAPHORE_URL') as string;
+    this.MASTER_MAP_TEMPLATE_ID = this.configService.get(
+      'MASTER_MAP_TEMPLATE_ID',
+    ) as string;
   }
 
   async getSemaphoreTaskStatus(taskId: number) {
@@ -151,6 +148,37 @@ export class ServerService {
         `❌ Failed to fetch task status for ID ${taskId}: ${error.response?.data?.message || error.message}`,
       );
       throw error;
+    }
+  }
+
+  async waitForTask(taskId: any) {
+    // 2. Poll until finished
+    let status = 'pending';
+    let attempts = 0;
+    const maxAttempts = 30; // 30 * 5 seconds = 2.5 minutes timeout
+
+    while (
+      status !== 'success' &&
+      status !== 'error' &&
+      attempts < maxAttempts
+    ) {
+      await this.sleep(5000); // Wait 5 seconds between checks
+
+      const taskDetails = await this.getSemaphoreTaskStatus(taskId);
+      status = taskDetails.status;
+
+      this.logger.log(`🔄 Task ${taskId} Current Status: ${status}`);
+      attempts++;
+    }
+
+    if (status === 'success') {
+      this.logger.log(`✅ Semaphore/Ansible task successfull`);
+      return { success: true, taskId };
+    } else {
+      this.logger.error(
+        `❌ Task ${taskId} failed or timed out with status: ${status}`,
+      );
+      throw new Error(`Ansible task failed: ${status}`);
     }
   }
 
@@ -247,35 +275,50 @@ export class ServerService {
     );
     const taskId = task.id;
     this.logger.log(`⏳ Monitoring Task ID: ${taskId} for ${domainName}...`);
+    return await this.waitForTask(taskId);
+  }
 
-    // 2. Poll until finished
-    let status = 'pending';
-    let attempts = 0;
-    const maxAttempts = 30; // 30 * 5 seconds = 2.5 minutes timeout
+  async triggerMasterRelayMap(
+    masterIp: string,
+    domain: string,
+    targetRelayIp: string,
+  ) {
+    const url = `${this.SEMAPHORE_URL}/api/project/${this.PROJECT_ID}/tasks`;
 
-    while (
-      status !== 'success' &&
-      status !== 'error' &&
-      attempts < maxAttempts
-    ) {
-      await this.sleep(5000); // Wait 5 seconds between checks
+    const payload = {
+      template_id: Number(this.MASTER_MAP_TEMPLATE_ID),
+      limit: masterIp, // We run this ON the master server
+      environment: JSON.stringify({
+        target_domain: domain,
+        relay_ip: targetRelayIp, // The IP of the child relay
+      }),
+      message: `Mapping ${domain} to relay ${targetRelayIp} on Master`,
+    };
 
-      const taskDetails = await this.getSemaphoreTaskStatus(taskId);
-      status = taskDetails.status;
+    const response = await axios.post(url, payload, {
+      headers: { Authorization: `bearer ${this.SEMAPHORE_API_TOKEN}` },
+    });
+    return response.data;
+  }
 
-      this.logger.log(`🔄 Task ${taskId} Current Status: ${status}`);
-      attempts++;
-    }
+  async setupMasterRelayMapping(
+    masterRelayIp: string,
+    domainName: string,
+    childRelayIp: string,
+  ) {
+    this.logger.log(
+      `🔗 Mapping ${domainName} on Master Relay (${masterRelayIp}) -> ${childRelayIp}`,
+    );
 
-    if (status === 'success') {
-      this.logger.log(`✅ DKIM Provisioned successfully for ${domainName}`);
-      return { success: true, taskId };
-    } else {
-      this.logger.error(
-        `❌ Task ${taskId} failed or timed out with status: ${status}`,
-      );
-      throw new Error(`Ansible task failed: ${status}`);
-    }
+    // 2. Trigger Semaphore Task
+    const task = await this.triggerMasterRelayMap(
+      masterRelayIp,
+      domainName,
+      childRelayIp,
+    );
+
+    // 3. Optional: Reuse your polling logic here to wait for 'success'
+    return this.waitForTask(task.id);
   }
 
   async getLinodesTypes() {

@@ -4,11 +4,11 @@ import { Job } from 'bullmq';
 import { SharedService } from 'src/shared/shared.service';
 import { ServerService } from './server.service';
 
-@Processor('dkim-provisioning', {
+@Processor('servers-cron', {
   concurrency: 10,
 })
-export class DkimProvisioningConsumer extends WorkerHost {
-  private readonly logger = new Logger(DkimProvisioningConsumer.name);
+export class ServerCronConsumer extends WorkerHost {
+  private readonly logger = new Logger(ServerCronConsumer.name);
 
   constructor(
     private readonly sharedService: SharedService,
@@ -18,30 +18,68 @@ export class DkimProvisioningConsumer extends WorkerHost {
   }
 
   async process(job: Job<any>): Promise<void> {
-    const { domainName, serverName } = job.data;
+    switch (job.name) {
+      case 'setup-dkim': {
+        const { domainName, serverName } = job.data;
 
-    this.logger.log(`Processing DKIM for ${domainName} on ${serverName}...`);
+        this.logger.log(
+          `Processing DKIM for ${domainName} on ${serverName}...`,
+        );
 
-    try {
-      // 1. Run the Ansible/DKIM logic
-      await this.serverService.assignAndSetupDkim(domainName, serverName);
+        try {
+          // 1. Run the Ansible/DKIM logic
+          await this.serverService.assignAndSetupDkim(domainName, serverName);
 
-      // 2. Update DB upon success
-      const { error } = await this.sharedService
-        .SupabaseClient()
-        .from('domains')
-        .update({ is_dkim_configured_in_server: true })
-        .eq('domain', domainName);
+          // 2. Update DB upon success
+          const { error } = await this.sharedService
+            .SupabaseClient()
+            .from('domains')
+            .update({ is_dkim_configured_in_server: true })
+            .eq('domain', domainName);
 
-      if (error) throw error;
+          if (error) throw error;
 
-      this.logger.log(`✅ Successfully provisioned DKIM for ${domainName}`);
-    } catch (error) {
-      this.logger.error(
-        `❌ Failed to provision DKIM for ${domainName}: ${error.message}`,
-      );
-      // Throwing the error here tells BullMQ the job failed, triggering a retry
-      throw error;
+          this.logger.log(`✅ Successfully provisioned DKIM for ${domainName}`);
+        } catch (error) {
+          this.logger.error(
+            `❌ Failed to provision DKIM for ${domainName}: ${error.message}`,
+          );
+          // Throwing the error here tells BullMQ the job failed, triggering a retry
+          throw error;
+        }
+      }
+
+      case 'map-domain-to-server': {
+        const { masterRelayIp, domainName, childRelayIp } = job.data;
+
+        this.logger.log(
+          `🚀 Starting mapping for ${domainName} to ${childRelayIp} on Master ${masterRelayIp}`,
+        );
+
+        try {
+          await this.serverService.setupMasterRelayMapping(
+            masterRelayIp,
+            domainName,
+            childRelayIp,
+          );
+
+          await this.sharedService
+            .SupabaseClient()
+            .from('domains')
+            .update({ is_mapped_to_relay: true })
+            .eq('domain', domainName);
+
+          this.logger.log(
+            `✅ Successfully mapped and updated status for ${domainName}`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `❌ Failed to map domain for ${domainName} to ${childRelayIp}: ${error.message}`,
+          );
+          // Throwing the error here tells BullMQ the job failed, triggering a retry
+          throw error;
+        }
+      }
     }
   }
 }

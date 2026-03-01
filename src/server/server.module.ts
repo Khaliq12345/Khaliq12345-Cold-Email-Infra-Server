@@ -5,11 +5,11 @@ import { ServerCronService } from './server.cron';
 import { SharedModule } from 'src/shared/shared.module';
 import { ConfigModule, ConfigService } from '@nestjs/config'; // Added ConfigService
 import { AuthModule } from 'src/auth/auth.module';
-import { DkimProvisioningConsumer } from './server.consumer';
+import { ServerCronConsumer } from './server.consumer';
 import { BullModule } from '@nestjs/bullmq';
 
 @Module({
-  providers: [ServerService, ServerCronService, DkimProvisioningConsumer],
+  providers: [ServerService, ServerCronService, ServerCronConsumer],
   controllers: [ServerController],
   imports: [
     SharedModule,
@@ -29,7 +29,7 @@ import { BullModule } from '@nestjs/bullmq';
       inject: [ConfigService],
     }),
     BullModule.registerQueue({
-      name: 'dkim-provisioning',
+      name: 'servers-cron',
       defaultJobOptions: {
         removeOnComplete: true,
       },

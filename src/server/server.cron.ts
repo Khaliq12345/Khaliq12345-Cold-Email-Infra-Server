@@ -12,8 +12,82 @@ export class ServerCronService {
   constructor(
     private readonly sharedservice: SharedService,
     private readonly service: ServerService,
-    @InjectQueue('dkim-provisioning') private dkimQueue: Queue,
+    @InjectQueue('servers-cron') private queueService: Queue,
   ) {}
+
+  @Cron(CronExpression.EVERY_MINUTE, {
+    name: 'map-domain-to-relay-server-via-master-server',
+  })
+  async MapParentServer() {
+    this.logger.log(
+      'Checking for verified domains needing mapping assignment...',
+    );
+    const client = this.sharedservice.SupabaseClient();
+
+    // 1. Fetch domains where DKIM is not yet configured, ensuring we join relay info
+    const { data: domains, error } = await client
+      .from('domains')
+      .select(
+        `
+        id, 
+        domain, 
+        relay_servers (
+          ipaddress,
+          master_relay_servers (
+            ip_address
+          )
+        )
+      `,
+      )
+      .is('paid', true)
+      .not('relay_server', 'is', null)
+      .is('is_mapped_to_relay', false);
+
+    if (error) {
+      this.logger.error(`Error fetching domains: ${error.message}`);
+      return;
+    }
+
+    if (!domains || domains.length === 0) return;
+
+    for (const record of domains) {
+      try {
+        // 2. Extract IPs from the joined relation
+        const serverInfo = record.relay_servers as any;
+        const childRelayIp = serverInfo?.ipaddress;
+        const masterRelayIp = serverInfo?.master_relay_servers?.ip_address;
+
+        if (!childRelayIp || !masterRelayIp) {
+          this.logger.error(
+            `Missing IP info for ${record.domain}. Child: ${childRelayIp}, Master: ${masterRelayIp}`,
+          );
+          continue;
+        }
+
+        // 3. TRIGGER ANSIBLE: Now that the DB is updated, run the Domain mapping
+        this.logger.log(`📥 Queuing Domain mapping for ${record.domain}`);
+
+        // Add to queue
+        await this.queueService.add(
+          'map-domain-to-server',
+          {
+            masterRelayIp: masterRelayIp,
+            domainName: record.domain,
+            childRelayIp: childRelayIp,
+          },
+          {
+            attempts: 3, // Retry if SSH fails
+            backoff: 5000, // Wait 5s between retries
+          },
+        );
+        break;
+      } catch (err) {
+        this.logger.error(
+          `❌ Failed to process domain ${record.domain}: ${err.message}`,
+        );
+      }
+    }
+  }
 
   @Cron(CronExpression.EVERY_MINUTE, { name: 'matching-domains-to-servers' })
   async matchDomainsToServers() {
@@ -57,8 +131,8 @@ export class ServerCronService {
           this.logger.log(`📥 Queuing DKIM setup for ${record.domain}`);
 
           // Add to queue
-          await this.dkimQueue.add(
-            'setup-job',
+          await this.queueService.add(
+            'setup-dkim',
             {
               domainName: record.domain,
               serverName: assignedServerName,
@@ -68,7 +142,7 @@ export class ServerCronService {
               backoff: 5000, // Wait 5s between retries
             },
           );
-          break
+          break;
         } else {
           // 4. TRIGGER CREATION: No capacity found in existing/fresh servers
           this.logger.warn(

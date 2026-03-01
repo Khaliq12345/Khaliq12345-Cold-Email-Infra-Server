@@ -24,7 +24,8 @@ export class PlusvibeCronService {
       .select('domain, username, master_mail_servers(domain)')
       .is('paid', true)
       .is('is_dkim_configured_in_server', true)
-      .is('is_dkim_set', true);
+      .is('is_dkim_set', true)
+      .is('is_mapped_to_relay', true);
 
     if (error) {
       this.logger.error(`Failed to fetch pending domains: ${error.message}`);
