@@ -1,6 +1,6 @@
 ---
 - name: Deploy Optimized Mailcow UI
-  hosts: mail_servers
+  hosts: all
   become: yes
   vars:
     mailcow_hostname: "mail.loolanta.org"
