@@ -1,0 +1,67 @@
+---
+- name: Deploy Optimized Mailcow UI
+  hosts: mail_servers
+  become: yes
+  vars:
+    mailcow_hostname: "mail.loolanta.org"
+    mailcow_timezone: "America/New_York"
+    mailcow_install_path: "/opt/mailcow-dockerized"
+    ansible_user_name: "mailserver"
+
+  tasks:
+    - name: Update apt cache and install dependencies
+      apt:
+        name: [git, openssl, curl, gawk, coreutils, grep, jq, python3-pip]
+        state: present
+        update_cache: yes
+
+    - name: Install Docker via official script
+      shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Create management user
+      user:
+        name: "{{ ansible_user_name }}"
+        groups: "sudo,docker"
+        append: yes
+        shell: /bin/bash
+
+    - name: Clone Mailcow repository
+      git:
+        repo: 'https://github.com/mailcow/mailcow-dockerized'
+        dest: "{{ mailcow_install_path }}"
+        version: master
+        umask: "0022"
+
+    - name: Generate Mailcow Config
+      shell: >
+        ./generate_config.sh <<EOF
+        {{ mailcow_hostname }}
+        {{ mailcow_timezone }}
+        1
+        EOF
+      args:
+        chdir: "{{ mailcow_install_path }}"
+        creates: "{{ mailcow_install_path }}/mailcow.conf"
+
+    - name: Apply Custom Optimizations (Disable ClamAV and Enable SNI)
+      lineinfile:
+        path: "{{ mailcow_install_path }}/mailcow.conf"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^SKIP_CLAMD=', line: 'SKIP_CLAMD=y' }
+        - { regexp: '^SKIP_SOLR=', line: 'SKIP_SOLR=y' }
+        - { regexp: '^ENABLE_SNI=', line: 'ENABLE_SNI=y' }
+
+    - name: Pull and Start Mailcow
+      community.docker.docker_compose_v2:
+        project_src: "{{ mailcow_install_path }}"
+        state: present
+        pull: always
+      register: output
+
+    - name: Show Mailcow Status
+      debug:
+        var: output
