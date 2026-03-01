@@ -34,11 +34,12 @@
         version: master
         umask: "0022"
 
-    - name: Generate Mailcow Config (Non-Interactive)
+    - name: Generate Mailcow Config (Forced Non-Interactive)
       ansible.builtin.shell:
-        cmd: "./generate_config.sh"
+        # printf "\n" simulates pressing Enter to confirm the detected IP/settings
+        cmd: 'printf "\n" | ./generate_config.sh'
       environment:
-        MAILCOW_HOSTNAME: "{{ mailcow_hostname }}"
+        MAILCOW_HOSTNAME: "{{ mailcow_hostname | trim }}"
         MAILCOW_TZ: "{{ mailcow_timezone }}"
         MAILCOW_BRANCH: "stable"
       args:
