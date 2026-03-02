@@ -26,11 +26,23 @@ export class DomainController {
 
   @UseGuards(AuthGuard)
   @Get()
-  async getUserDomains(@Request() req: any) {
+  async getUserDomains(
+    @Request() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
     try {
       const username = req.user.user_metadata.username;
 
-      return await this.service.getDomainsByUser(username);
+      // Convert strings to numbers and provide defaults
+      const pageNumber = Math.max(1, Number(page) || 1);
+      const limitNumber = Math.max(1, Number(limit) || 20);
+
+      return await this.service.getDomainsByUser(
+        username,
+        pageNumber,
+        limitNumber,
+      );
     } catch (error) {
       throw new InternalServerErrorException('Could not retrieve domains');
     }

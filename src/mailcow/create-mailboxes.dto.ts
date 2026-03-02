@@ -1,7 +1,8 @@
 export class CreateMailboxesDto {
-  domain: string;
+  domains: string[];
   firstName: string;
   lastName: string;
   total: number;
+  isBulk: boolean;
   masterMailServerDomain: string;
 }

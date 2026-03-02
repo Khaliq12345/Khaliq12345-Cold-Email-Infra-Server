@@ -44,20 +44,43 @@ export class DomainService {
     return data;
   }
 
-  async getDomainsByUser(username: string) {
+  async getDomainsByUser(
+    username: string,
+    page: number = 1,
+    limit: number = 20,
+  ) {
     const client = this.service.SupabaseClient();
 
-    const { data, error } = await client
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    const { data, error, count } = await client
       .from('domains')
-      .select('*')
-      .eq('username', username);
+      .select('*, mailboxes(count)', { count: 'exact' })
+      .eq('username', username)
+      .order('created_at', { ascending: false })
+      .range(from, to); // For page 1, limit 1: .range(0, 0)
 
     if (error) {
       this.logger.error(`Error fetching domains for user: ${error.message}`);
       throw error;
     }
 
-    return data;
+    // 2. Map the data to REMOVE the "mailboxes" array and replace with a number
+    const formattedData = data.map((item) => {
+      // Extract the count and remove the original mailboxes key
+      const { mailboxes, ...domainData } = item;
+
+      return {
+        ...domainData,
+        total_active_mailboxes: mailboxes?.[0]?.count || 0,
+      };
+    });
+
+    // 3. Return the cleaned object
+    return {
+      data: formattedData,
+      total: count,
+    };
   }
 
   async getDomainDetails(domain: string) {

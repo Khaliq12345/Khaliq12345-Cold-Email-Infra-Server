@@ -13,24 +13,36 @@ import { CreateMailboxesDto } from './create-mailboxes.dto';
 import { UpdateMailboxesDto } from './update-mailboxes-quota.dto';
 import { createMailboxesDomainDto } from './create-mailboxes-domain.dto';
 import { AuthGuard } from 'src/auth/auth.guard';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 @Controller('mailboxes')
 export class MailcowController {
-  constructor(private service: MailcowService) {}
+  constructor(
+    private service: MailcowService,
+    @InjectQueue('mailcow-consumer') private queueService: Queue,
+  ) {}
 
   @UseGuards(AuthGuard)
   @Post('create')
   @HttpCode(201)
   async createMailboxes(@Body() createMailboxesDto: CreateMailboxesDto) {
     try {
-      await this.service.createMailboxes(
-        createMailboxesDto.domain,
-        createMailboxesDto.firstName,
-        createMailboxesDto.lastName,
-        createMailboxesDto.total,
+      // Add to queue
+      await this.queueService.add(
+        'create-mailboxes',
+        {
+          firstname: createMailboxesDto.firstName,
+          lastname: createMailboxesDto.lastName,
+          domains: createMailboxesDto.domains,
+          total: createMailboxesDto.total,
+        },
+        {
+          attempts: 3,
+          backoff: 5000,
+        },
       );
-
-      return { status: 'success', details: 'mailboxes created' };
+      return { status: 'success', details: 'mailboxes creation started' };
     } catch (error) {
       return { status: 'failed', details: error };
     }
