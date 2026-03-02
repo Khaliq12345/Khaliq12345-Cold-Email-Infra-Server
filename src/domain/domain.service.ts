@@ -57,6 +57,7 @@ export class DomainService {
       .from('domains')
       .select('*, mailboxes(count)', { count: 'exact' })
       .eq('username', username)
+      .eq('mailboxes.is_active', true)
       .order('created_at', { ascending: false })
       .range(from, to); // For page 1, limit 1: .range(0, 0)
 
