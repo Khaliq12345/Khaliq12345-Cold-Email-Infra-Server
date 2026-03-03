@@ -3,59 +3,10 @@ import axios from 'axios';
 import { SharedService } from 'src/shared/shared.service';
 import http from 'http';
 import https from 'https';
-
-function generateUniqueAlphaNames(
-  first: string,
-  last: string,
-  count: number = 100,
-): string[] {
-  const names = new Set<string>();
-  const f = first.toLowerCase().trim();
-  const l = last.toLowerCase().trim();
-  const fi = f[0]; // first initial
-  const li = l[0]; // last initial
-
-  // 1. Core Patterns (Based on your "Nicole Soto" examples)
-  const corePatterns = [
-    f, // nicole
-    `${f}.${li}`, // nicole.s
-    `${fi}.${l}`, // n.soto
-    `${fi}${li}`, // ns
-    `${fi}${l}`, // nsoto
-    `${f}${li}`, // nicoles
-    `${f}.${l}`, // nicole.soto
-  ];
-
-  for (const name of corePatterns) {
-    if (names.size < count) names.add(name);
-  }
-
-  // 2. Numeric Strategy (nicole2, nsoto1, etc.)
-  // We iterate numbers and apply them to the base patterns
-  let num = 1;
-  while (names.size < count && num < 1000) {
-    // Priority: common combinations with numbers
-    const numericVariations = [
-      `${fi}${l}${num}`, // nsoto1
-      `${f}${num}`, // nicole2
-      `${f}.${l}${num}`, // nicole.s13 (if num is 13)
-      `${f}.${li}${num}`, // nicole.s1
-      `${fi}.${l}${num}`, // n.soto1
-    ];
-
-    for (const v of numericVariations) {
-      if (names.size < count) names.add(v);
-    }
-    num++;
-  }
-
-  return Array.from(names);
-}
-
-const generateStr = (len: number) =>
-  Math.random()
-    .toString(36)
-    .substring(2, 2 + len);
+import {
+  generateStr,
+  generateUniqueAlphaNames,
+} from 'src/common/constants/working-with-text';
 
 @Injectable()
 export class MailcowService {
@@ -147,17 +98,38 @@ export class MailcowService {
     lastName: string,
     total: number,
   ) {
+    // 1. Fetch existing emails from Supabase
+    const existingEmails = await this.getExistingEmails(domain);
+    const existingCount = existingEmails.length;
+
+    // 2. Calculate remaining capacity (Max 100)
+    const MAX_ALLOWED = 100;
+    const remainingSlots = MAX_ALLOWED - existingCount;
+
+    if (remainingSlots <= 0) {
+      this.logger.warn(
+        `Domain ${domain} has already reached the limit of ${MAX_ALLOWED} mailboxes.`,
+      );
+      return { success: false, message: 'Limit reached' };
+    }
+
+    // 3. Generate requested names
     const allLocalparts = generateUniqueAlphaNames(firstName, lastName, total);
 
-    // 2. Fetch existing emails from Supabase to prevent duplicates
-    const existingEmails = await this.getExistingEmails(domain);
-
-    // 3. FILTER: Only keep localparts that don't exist in the DB yet
-    const localpartsToProcess = allLocalparts.filter((lp) => {
+    // 4. FILTER: Remove duplicates already in the DB
+    const uniqueLocalparts = allLocalparts.filter((lp) => {
       const fullEmail = `${lp}@${domain}`;
       const dbRecord = existingEmails.find((rec) => rec.email === fullEmail);
+      // Keep only if doesn't exist or is inactive
       return !dbRecord || dbRecord.is_active === false;
     });
+
+    // 5. ENFORCE LIMIT: Cap the "to process" list to the remaining slots
+    const localpartsToProcess = uniqueLocalparts.slice(0, remainingSlots);
+
+    this.logger.log(
+      `Existing: ${existingCount}. Adding: ${localpartsToProcess.length}. Total will be: ${existingCount + localpartsToProcess.length}`,
+    );
 
     // Getting the master domain
     const masterMailServerDomain = await this.getMasterDomain(domain);
@@ -166,6 +138,7 @@ export class MailcowService {
       this.logger.log(`Processing localpart - ${localpart}`);
       const fullEmail = `${localpart}@${domain}`;
       const password = generateStr(50);
+
       const payload = {
         email: fullEmail,
         password: password,
@@ -178,69 +151,67 @@ export class MailcowService {
         imap_port: '993',
         smtp_host: masterMailServerDomain,
         smtp_port: '465',
+        is_active: false, // Start as false until API succeeds
       };
 
-      // send the mailboxes to mailcow
-      const { data, error } = await this.supabase
+      // 6. DB Upsert
+      const { data, error: dbError } = await this.supabase
         .SupabaseClient()
         .from('mailboxes')
         .upsert(payload, { onConflict: 'email' })
         .select()
         .single();
 
-      if (error) {
-        const errorMsg = `Failed to write to DB, skipping API for ${fullEmail}: ${error.message}`;
-        throw Error(errorMsg);
-      }
-      this.logger.log('Sent to supaabse');
-
-      // Send the mailcow
-      const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
-      const token = await this.getApiKey(masterMailServerDomain);
-      const response = await axios.post(
-        `${MAILCOW_API_BASE}/add/mailbox`,
-        {
-          local_part: localpart,
-          domain: domain,
-          name: `${firstName} ${lastName}`,
-          quota: '100',
-          password: password,
-          password2: password,
-          active: '1',
-          force_pw_update: '0',
-          tls_enforce_in: '1',
-          tls_enforce_out: '1',
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': token,
-          },
-          timeout: 30000,
-          httpAgent: new http.Agent({ family: 4 }),
-          httpsAgent: new https.Agent({ family: 4 }),
-        },
-      );
-
-      // --- FIXED LOGIC HERE ---
-      const result = response.data[0];
-
-      if (result?.type !== 'success') {
-        // If the API says 'error', we jump to the catch block
-        throw new Error(
-          `Mailcow API returned: ${result?.msg || 'Unknown Error'}`,
+      if (dbError) {
+        this.logger.error(
+          `Failed DB write for ${fullEmail}: ${dbError.message}`,
         );
+        continue; // Skip to next instead of crashing the whole loop
       }
-      this.logger.log('Mailbox created');
 
-      // --- STEP 3: UPDATE DB STATUS ON SUCCESS ---
-      await this.supabase
-        .SupabaseClient()
-        .from('mailboxes')
-        .update({ is_active: true })
-        .eq('email', data.email);
+      try {
+        // 7. Mailcow API call
+        const MAILCOW_API_BASE = `https://${masterMailServerDomain}/api/v1`;
+        const token = await this.getApiKey(masterMailServerDomain);
 
-      this.logger.log('Supabase updated');
+        const response = await axios.post(
+          `${MAILCOW_API_BASE}/add/mailbox`,
+          {
+            local_part: localpart,
+            domain: domain,
+            name: `${firstName} ${lastName}`,
+            quota: '100',
+            password: password,
+            password2: password,
+            active: '1',
+            force_pw_update: '0',
+            tls_enforce_in: '1',
+            tls_enforce_out: '1',
+          },
+          {
+            headers: { 'X-API-Key': token },
+            timeout: 30000,
+          },
+        );
+
+        const result = response.data[0];
+
+        if (result?.type !== 'success') {
+          throw new Error(`Mailcow API error: ${result?.msg}`);
+        }
+
+        // 8. Finalize DB Status
+        await this.supabase
+          .SupabaseClient()
+          .from('mailboxes')
+          .update({ is_active: true, status: 'active' })
+          .eq('email', fullEmail);
+
+        this.logger.log(`Success: ${fullEmail} created and activated.`);
+      } catch (apiError) {
+        this.logger.error(`API Failure for ${fullEmail}: ${apiError.message}`);
+        // Optional: mark DB status as 'failed' here
+      }
     }
   }
 
