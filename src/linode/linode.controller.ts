@@ -7,11 +7,16 @@ import {
   InternalServerErrorException,
   HttpCode,
   HttpStatus,
+  Get,
+  Query,
+  Put,
 } from '@nestjs/common';
 import { AddArecordDto } from './addArecord.dto';
 import { LinodeService } from './linode.service';
 import { AuthGuard } from 'src/auth/auth.guard';
 import { createSupportTicketDto } from './create-support.dto';
+import { CreateServerDto } from './createServer.dto';
+import { configureRdnDto } from './configureRdns.dto';
 
 @Controller('linode')
 export class LinodeController {
@@ -40,7 +45,7 @@ export class LinodeController {
   @Post('support/ticket')
   async openTicket(@Body() body: createSupportTicketDto) {
     try {
-      this.service.openSupportTicket(body.linodeId, body.domain);
+      this.service.oenSupportTicket(body.linodeId, body.domain);
     } catch (error) {
       return error.message;
     }
@@ -127,5 +132,46 @@ export class LinodeController {
         `Linode API Error: ${errorMessage}`,
       );
     }
+  }
+
+  // SERVER
+
+  @UseGuards(AuthGuard)
+  @Get('type')
+  async getLinodeTypes() {
+    const response = await this.service.getLinodesTypes();
+    return { status: 'success', data: response.data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('get-sever')
+  async getLinodeServer(@Query('label') label: string) {
+    const response = await this.service.getLinodeServer(label);
+    return { status: 'success', data: response.data };
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('create-server')
+  async createLinodeServer(@Body() createServerDto: CreateServerDto) {
+    const response = await this.service.createLinode(
+      createServerDto.hostname,
+      createServerDto.domain,
+      createServerDto.parentIp,
+      createServerDto.serverType,
+    );
+
+    return { status: 'success', data: response };
+  }
+
+  @UseGuards(AuthGuard)
+  @Put('reverse-dns')
+  async configureReverseDns(@Body() body: configureRdnDto) {
+    const response = await this.service.configureReverseDns(
+      body.linodeId,
+      body.ipAddress,
+      body.relayHostname,
+    );
+
+    return { status: 'success', data: response };
   }
 }
