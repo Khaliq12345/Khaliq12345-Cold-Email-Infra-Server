@@ -15,7 +15,7 @@ export class ServerCronService {
     @InjectQueue('servers-cron') private queueService: Queue,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'map-domain-to-relay-server-via-master-server',
   })
   async MapParentServer() {
@@ -89,7 +89,7 @@ export class ServerCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'matching-domains-to-servers' })
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'matching-domains-to-servers' })
   async matchDomainsToServers() {
     this.logger.log(
       'Checking for verified domains needing server assignment...',

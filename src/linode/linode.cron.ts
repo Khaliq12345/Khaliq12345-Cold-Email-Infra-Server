@@ -11,7 +11,7 @@ export class LinodeCronService {
     private readonly service: LinodeService,
   ) {}
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleARecordProvisioning() {
     this.logger.log('Checking for relay servers needing A-records...');
 
@@ -225,7 +225,7 @@ export class LinodeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'setup-mailserver-dns',
   })
   async syncMailServerDns() {
@@ -296,7 +296,7 @@ export class LinodeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, {
+  @Cron(CronExpression.EVERY_5_MINUTES, {
     name: 'sync-server-status',
   })
   async syncServerStatuses() {
@@ -373,7 +373,7 @@ export class LinodeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async handleReverseDnsConfiguration() {
     this.logger.log('Checking for relay servers needing Reverse DNS...');
 
