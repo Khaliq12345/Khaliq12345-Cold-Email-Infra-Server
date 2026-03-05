@@ -309,7 +309,7 @@ export class LinodeService {
         this.availableRegions[
           Math.floor(Math.random() * this.availableRegions.length)
         ],
-      type: serverType === 'relay' ? 'g6-nanode-1' : 'g6-standard-2',
+      type: serverType === 'relay' ? 'g6-nanode-1' : 'g6-standard-8',
       image: 'linode/ubuntu24.04',
       label:
         serverType === 'relay'
