@@ -1,12 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { SharedService } from 'src/shared/shared.service';
-import http from 'http';
-import https from 'https';
 import {
   generateStr,
   generateUniqueAlphaNames,
 } from 'src/common/constants/working-with-text';
+import { URLSearchParams } from 'url';
 
 @Injectable()
 export class MailcowService {
@@ -347,6 +346,71 @@ export class MailcowService {
       return response.data;
     } catch (error) {
       return error.response?.data || error.message;
+    }
+  }
+
+  async createDomainTransport(
+    masterMailServerDomain: string,
+    relayIp: string,
+  ): Promise<any> {
+    // Postfix/Mailcow literal IP format
+    const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(relayIp);
+    const formattedHost = isIp ? `[${relayIp}]:25` : `${relayIp}:25`;
+
+    try {
+      const token = await this.getApiKey(masterMailServerDomain);
+      const url = `https://${masterMailServerDomain}/api/v1/add/relayhost`;
+
+      // 1. Create the inner data object
+      const attrData = {
+        hostname: formattedHost,
+        username: '',
+        password: '',
+      };
+
+      // 2. Wrap it in URLSearchParams to force application/x-www-form-urlencoded
+      const params = new URLSearchParams();
+      params.append('attr', JSON.stringify(attrData));
+
+      const response = await axios.post(url, params, {
+        headers: {
+          'X-API-Key': token,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      });
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Mailcow API Error: ${error.message}`);
+      return null;
+    }
+  }
+
+  async getRelayHostIdByHostname(
+    masterMailServerDomain: string,
+    hostname: string,
+  ): Promise<number | null> {
+    try {
+      const token = await this.getApiKey(masterMailServerDomain);
+      const url = `https://${masterMailServerDomain}/api/v1/get/relayhost/all`;
+
+      const response = await axios.get(url, {
+        headers: { 'X-API-Key': token },
+      });
+
+      const parsedHostname = `[${hostname}]:25`;
+      this.logger.log(parsedHostname)
+      if (Array.isArray(response.data)) {
+        // Find the entry matching our formatted hostname
+        const match = response.data.find(
+          (item) => item.hostname === parsedHostname,
+        );
+        return match ? parseInt(match.id) : null;
+      }
+      return null;
+    } catch (error) {
+      this.logger.error(`Failed to fetch relay hosts: ${error.message}`);
+      return null;
     }
   }
 

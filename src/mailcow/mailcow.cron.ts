@@ -106,11 +106,7 @@ export class MailcowCronService {
         `
       id,
       domain,
-      relay_servers (
-        ipaddress,
-        master_relay_servers ( mailcow_relay_id )
-      ),
-      master_mail_servers ( domain )
+      master_mail_servers ( domain, relay_host_id )
     `,
       )
       .is('paid', true)
@@ -126,20 +122,12 @@ export class MailcowCronService {
 
     for (const record of domains) {
       try {
-        // 2. Extracting nested data safely
-        const relay = Array.isArray(record.relay_servers)
-          ? record.relay_servers[0]
-          : record.relay_servers;
-
-        const masterRelayData = Array.isArray(relay?.master_relay_servers)
-          ? relay?.master_relay_servers[0]
-          : relay?.master_relay_servers;
-
+        // Extracting nested data safely
         const masterMailData = Array.isArray(record.master_mail_servers)
           ? record.master_mail_servers[0]
           : record.master_mail_servers;
 
-        const masterRelayId = masterRelayData?.mailcow_relay_id;
+        const masterRelayId = masterMailData?.relay_host_id;
         const masterMailDomain = masterMailData?.domain;
 
         // 3. Validation
@@ -190,6 +178,87 @@ export class MailcowCronService {
         }
       } catch (e) {
         this.logger.error(`💥 Exception for ${record.domain}: ${e.message}`);
+      }
+    }
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async handleMasterRelaySetup() {
+    this.logger.log(
+      'Checking Master Mail Servers for missing Relay Host IDs...',
+    );
+
+    const client = this.sharedservice.SupabaseClient();
+
+    // Your correct query
+    const { data: records, error } = await client
+      .from('master_mail_servers')
+      .select(
+        `
+      id,
+      domain,
+      master_relay,
+      relay_host_id,
+      master_relay_servers(ip_address)
+    `,
+      )
+      .not('master_relay', 'is', null)
+      .not('api_key', 'is', null)
+      .is('relay_host_id', null);
+
+    if (error) {
+      this.logger.error(`Supabase Query Error: ${error.message}`);
+      return;
+    }
+
+    if (!records || records.length === 0) return;
+
+    for (const record of records) {
+      try {
+        // Extract IP from the joined master_relay_servers
+        const relayData = Array.isArray(record.master_relay_servers)
+          ? record.master_relay_servers[0]
+          : record.master_relay_servers;
+
+        if (!relayData?.ip_address) {
+          this.logger.warn(
+            `No IP found for relay server linked to ${record.domain}`,
+          );
+          continue;
+        }
+
+        // Create the transport in Mailcow
+        await this.service.createDomainTransport(
+          record.domain,
+          relayData.ip_address,
+        );
+        const relayHostId = await this.service.getRelayHostIdByHostname(
+          record.domain,
+          relayData.ip_address,
+        );
+
+        if (!relayHostId) {
+          this.logger.error(
+            `Could not extract ID from Mailcow for ${record.domain}`,
+          );
+          continue;
+        }
+
+        // Update the master_mail_servers table with the new ID
+        const { error: updateError } = await client
+          .from('master_mail_servers')
+          .update({ relay_host_id: relayHostId.toString() })
+          .eq('id', record.id);
+
+        if (updateError) throw updateError;
+
+        this.logger.log(
+          `✅ Successfully mapped Relay ID ${relayHostId} to ${record.domain}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `Error processing master server ${record.domain}: ${e.message}`,
+        );
       }
     }
   }

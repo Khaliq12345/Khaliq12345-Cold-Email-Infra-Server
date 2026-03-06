@@ -116,6 +116,29 @@ export class MailcowController {
   }
 
   @UseGuards(AuthGuard)
+  @Post('domain/create-transport')
+  async createTransport(
+    @Body()
+    body: {
+      masterMailServerDomain: string;
+      hostname: string;
+    },
+  ) {
+    const { masterMailServerDomain, hostname } = body;
+
+    const result = await this.service.createDomainTransport(
+      masterMailServerDomain,
+      hostname,
+    );
+
+    return {
+      success: true,
+      message: `Mailserver ${masterMailServerDomain} transport host is set`,
+      data: result,
+    };
+  }
+
+  @UseGuards(AuthGuard)
   @Get(':domain')
   async getMailboxesDb(@Param('domain') domain: string) {
     return await this.service.getDatabaseMailboxesByDomain(domain);
