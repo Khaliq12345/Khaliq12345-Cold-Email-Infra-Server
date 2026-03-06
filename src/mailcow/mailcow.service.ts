@@ -360,7 +360,6 @@ export class MailcowService {
     try {
       const token = await this.getApiKey(masterMailServerDomain);
       const url = `https://${masterMailServerDomain}/api/v1/add/relayhost`;
-      this.logger.log(token, url);
 
       // 1. Create the inner data object
       const attrData = {
