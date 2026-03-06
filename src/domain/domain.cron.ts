@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import axios from 'axios';
-import * as dns from 'dns';
 import { SharedService } from 'src/shared/shared.service';
-import { promisify } from 'util';
-
-const resolveNs = promisify(dns.resolveNs);
 
 @Injectable()
 export class DomainCronService {

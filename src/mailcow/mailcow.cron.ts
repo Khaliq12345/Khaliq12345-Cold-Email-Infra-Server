@@ -94,7 +94,7 @@ export class MailcowCronService {
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
-  async handleMailcowRelaySetup() {
+  async handleDomainRelayConnection() {
     this.logger.log('Checking for domains needing Mailcow Relay Host setup...');
 
     const client = this.sharedservice.SupabaseClient();
