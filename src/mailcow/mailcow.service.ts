@@ -360,6 +360,7 @@ export class MailcowService {
     try {
       const token = await this.getApiKey(masterMailServerDomain);
       const url = `https://${masterMailServerDomain}/api/v1/add/relayhost`;
+      this.logger.log(token, url);
 
       // 1. Create the inner data object
       const attrData = {
@@ -399,7 +400,7 @@ export class MailcowService {
       });
 
       const parsedHostname = `[${hostname}]:25`;
-      this.logger.log(parsedHostname)
+      this.logger.log(parsedHostname);
       if (Array.isArray(response.data)) {
         // Find the entry matching our formatted hostname
         const match = response.data.find(
