@@ -12,7 +12,7 @@ export class PlusvibeCronService {
     private readonly service: PlusvibeService,
   ) {}
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_HOUR)
   async handlePlusvibeSync() {
     this.logger.log('Starting Plusvibe synchronization cron...');
 
@@ -62,7 +62,7 @@ export class PlusvibeCronService {
     }
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_2_HOURS)
   async updateMailcowStatus() {
     this.logger.log('Starting Plusvibe mailbox update cron...');
 
