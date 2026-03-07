@@ -64,19 +64,25 @@ export class ServerCronService {
           ? relayServer.master_relay_servers[0]
           : relayServer?.master_relay_servers;
 
-        const childRelayIp = relayServer?.ipaddress;
-        const masterRelayIp = masterRelayServer?.ip_address;
+        const childRelayIp = relayServer.ipaddress;
+        const masterRelayIp = masterRelayServer.ip_address;
         this.logger.log(
           `Relay Server IP: ${childRelayIp ?? 'NULL'}, ` +
             `Master Relay IP: ${masterRelayIp ?? 'NULL'}`,
         );
 
         // 3. Validation with detailed logging
-        if (!childRelayIp || !masterRelayIp) {
+        const isInvalid = (val: any) =>
+          val === undefined ||
+          val === null ||
+          val === 'undefined' ||
+          val === 'NULL';
+
+        if (isInvalid(childRelayIp) || isInvalid(masterRelayIp)) {
           this.logger.error(
-            `Skipping ${record.domain}: Missing IP info. ` +
-              `Relay Server IP: ${childRelayIp ?? 'NULL'}, ` +
-              `Master Relay IP: ${masterRelayIp ?? 'NULL'}`,
+            `Skipping ${record.domain}: Missing or invalid IP info. ` +
+              `Relay Server IP: ${childRelayIp ?? 'UNDEFINED'}, ` +
+              `Master Relay IP: ${masterRelayIp ?? 'UNDEFINED'}`,
           );
           continue;
         }

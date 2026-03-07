@@ -52,11 +52,25 @@ export class ServerCronConsumer extends WorkerHost {
       case 'map-domain-to-server': {
         const { masterRelayIp, domainName, childRelayIp } = job.data;
 
+        // 1. Define strict IPv4 Regex
+        const ipv4Regex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+
+        // 2. Comprehensive Validation (Checks for null, undefined, strings, and format)
+        const isInvalidIp = (ip: any) =>
+          !ip || ip === 'undefined' || ip === 'null' || !ipv4Regex.test(ip);
+
+        if (isInvalidIp(masterRelayIp) || isInvalidIp(childRelayIp)) {
+          const errorMsg = `Aborting job: Invalid IP coordinates. Master: ${masterRelayIp}, Child: ${childRelayIp}`;
+          this.logger.error(`❌ ${errorMsg}`);
+          return;
+        }
+
         this.logger.log(
           `🚀 Starting mapping for ${domainName} to ${childRelayIp} on Master ${masterRelayIp}`,
         );
 
         try {
+          // This service likely uses the 'relay' user and port 6666 defined in your inventory
           await this.serverService.setupMasterRelayMapping(
             masterRelayIp,
             domainName,
@@ -76,9 +90,9 @@ export class ServerCronConsumer extends WorkerHost {
           this.logger.error(
             `❌ Failed to map domain for ${domainName} to ${childRelayIp}: ${error.message}`,
           );
-          // Throwing the error here tells BullMQ the job failed, triggering a retry
           throw error;
         }
+        break;
       }
     }
   }
