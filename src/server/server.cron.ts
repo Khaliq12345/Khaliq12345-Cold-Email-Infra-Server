@@ -66,6 +66,10 @@ export class ServerCronService {
 
         const childRelayIp = relayServer?.ipaddress;
         const masterRelayIp = masterRelayServer?.ip_address;
+        this.logger.log(
+          `Relay Server IP: ${childRelayIp ?? 'NULL'}, ` +
+            `Master Relay IP: ${masterRelayIp ?? 'NULL'}`,
+        );
 
         // 3. Validation with detailed logging
         if (!childRelayIp || !masterRelayIp) {
