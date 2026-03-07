@@ -11,6 +11,8 @@ import {
 import axios from 'axios';
 import { SharedService } from 'src/shared/shared.service';
 import { ConfigService } from '@nestjs/config';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 @Injectable()
 export class PlusvibeService {
@@ -21,6 +23,7 @@ export class PlusvibeService {
   constructor(
     private readonly sharedService: SharedService,
     private configService: ConfigService,
+    @InjectQueue('plusvibe-cron') private queueService: Queue,
   ) {
     this.apiBaseUrl = this.configService.get('PLUSVIBE_BASE_URL') as string;
     this.apiKey = this.configService.get('PLUSVIBE_API_KEY') as string;
@@ -156,6 +159,7 @@ export class PlusvibeService {
     domain: string,
     mailserverHost: string,
     username: string,
+    workspaceId: string,
   ) {
     const { data, error } = await this.sharedService
       .SupabaseClient()
@@ -219,7 +223,7 @@ export class PlusvibeService {
       },
     });
     await instance.post('/account/bulk-add-regular-accounts', {
-      workspace_id: credential.workspaceId,
+      workspace_id: workspaceId,
       accounts: accountsToProcess,
     });
 
@@ -234,7 +238,7 @@ export class PlusvibeService {
       .SupabaseClient()
       .from('mailboxes')
       .update({ added_to_plusvibe: true, status: 'warming' })
-      .in('email', accountEmails); // Efficiently updates all processed emails at once
+      .in('email', accountEmails);
 
     if (updateError) {
       console.log('Error updating Supabase status:', updateError);
@@ -266,5 +270,57 @@ export class PlusvibeService {
       this.logger.error(`PlusVibe List Email Accounts Error: ${errorMessage}`);
       throw error;
     }
+  }
+
+  async queueSendMailboxesToWorkspace(
+    requestedDomains: string[],
+    workspaceId: string,
+  ) {
+    // 1. Fetch from Supabase with filters
+    const { data: matchedDomains, error } = await this.sharedService
+      .SupabaseClient()
+      .from('domains')
+      .select('domain, username, master_mail_servers(domain)')
+      .in('domain', requestedDomains)
+      .is('paid', true)
+      .is('is_dkim_configured_in_server', true)
+      .is('is_dkim_set', true)
+      .is('is_mapped_to_relay', true);
+
+    if (error) {
+      this.logger.error(`Supabase error: ${error.message}`);
+      throw new InternalServerErrorException('Database query failed');
+    }
+
+    if (!matchedDomains || matchedDomains.length === 0) {
+      this.logger.log('No domains met the sync criteria.');
+      return { success: false, matchedCount: 0 };
+    }
+
+    // 2. Map and Add to Queue
+    await this.queueService.add(
+      'add-mailboxes-to-workspace',
+      {
+        domains: matchedDomains.map((d) => ({
+          domain: d.domain,
+          username: d.username,
+          master_mail_servers: (d.master_mail_servers as any)?.domain,
+        })),
+        workspaceId: workspaceId,
+      },
+      {
+        attempts: 3,
+        backoff: 5000,
+        removeOnComplete: true,
+      },
+    );
+
+    this.logger.log(`Queued ${matchedDomains.length} domains for sync.`);
+
+    return {
+      success: true,
+      matchedCount: matchedDomains.length,
+      providedCount: requestedDomains.length,
+    };
   }
 }

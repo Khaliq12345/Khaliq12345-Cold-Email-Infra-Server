@@ -1,17 +1,16 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
-  Patch,
   Post,
   Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { PlusvibeService } from './plusvibe.service';
-import { AddMailboxesToWorkspaceDto } from './addMailboxesToWorkspace.dto';
 import { AuthGuard } from 'src/auth/auth.guard';
 
 @Controller('plusvibe')
@@ -27,17 +26,31 @@ export class PlusvibeController {
   }
 
   @UseGuards(AuthGuard)
-  @Post('workspace/add')
+  @Post('workspace/add-mailboxes')
   async addMailboxesToWorkspace(
-    @Body() addMailboxesToWorkspaceDto: AddMailboxesToWorkspaceDto,
+    @Body() data: { domains: string[]; workspaceId: string },
   ) {
-    await this.service.sendMailboxesToWorkspace(
-      addMailboxesToWorkspaceDto.domain,
-      addMailboxesToWorkspaceDto.workspaceId,
-      addMailboxesToWorkspaceDto.mailserverHost,
-    );
+    // 1. Presence validation
+    if (
+      !data.domains ||
+      !Array.isArray(data.domains) ||
+      data.domains.length === 0
+    ) {
+      throw new BadRequestException('A list of domains is required');
+    }
 
-    return { status: 'success', details: 'Mailboxes added to workspace' };
+    // 2. Limit validation (Max 500)
+    const domains = data.domains.slice(0, 500);
+
+    // 3. Workspace ID validation
+    if (!data.workspaceId) {
+      throw new BadRequestException('Workspace ID is required');
+    }
+
+    return await this.service.queueSendMailboxesToWorkspace(
+      domains,
+      data.workspaceId,
+    );
   }
 
   @UseGuards(AuthGuard)
