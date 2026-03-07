@@ -421,8 +421,8 @@ export class MailcowService {
     const { data, error } = await client
       .from('mailboxes')
       .select('*')
-      .eq('domain', domain)
-      .is('is_active', true);
+      .eq('domain', domain);
+    // .is('is_active', true);
 
     if (error) {
       this.logger.error(

@@ -57,9 +57,9 @@ export class DomainService {
       .from('domains')
       .select('*, mailboxes(count)', { count: 'exact' })
       .eq('username', username)
-      .eq('mailboxes.is_active', true)
+      // .eq('mailboxes.is_active', true)
       .order('created_at', { ascending: false })
-      .range(from, to); // For page 1, limit 1: .range(0, 0)
+      .range(from, to);
 
     if (error) {
       this.logger.error(`Error fetching domains for user: ${error.message}`);
