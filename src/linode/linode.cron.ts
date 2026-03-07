@@ -36,6 +36,18 @@ export class LinodeCronService {
 
     for (const server of servers) {
       try {
+        // 1. DEFENSIVE CHECK: Handle potential null or array from join
+        const masterData = Array.isArray(server.master_relay_server)
+          ? server.master_relay_server[0]
+          : server.master_relay_server;
+
+        if (!masterData || !masterData.domain) {
+          this.logger.warn(
+            `Skipping ${server.server_name}: No master_relay_server or domain found for this record.`,
+          );
+          continue; // Skip this iteration
+        }
+
         this.logger.log(
           `Setting A-record for ${server.server_name} -> ${server.ipaddress}`,
         );
