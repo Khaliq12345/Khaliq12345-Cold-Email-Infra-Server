@@ -52,14 +52,27 @@ export class ServerCronService {
 
     for (const record of domains) {
       try {
-        // 2. Extract IPs from the joined relation
-        const serverInfo = record.relay_servers as any;
-        const childRelayIp = serverInfo?.ipaddress;
-        const masterRelayIp = serverInfo?.master_relay_servers?.ip_address;
+        // 1. Handle potential array or object for relay_servers
+        const relayServer = Array.isArray(record.relay_servers)
+          ? record.relay_servers[0]
+          : record.relay_servers;
 
+        // 2. Handle potential array or object for master_relay_servers
+        const masterRelayServer = Array.isArray(
+          relayServer?.master_relay_servers,
+        )
+          ? relayServer.master_relay_servers[0]
+          : relayServer?.master_relay_servers;
+
+        const childRelayIp = relayServer?.ipaddress;
+        const masterRelayIp = masterRelayServer?.ip_address;
+
+        // 3. Validation with detailed logging
         if (!childRelayIp || !masterRelayIp) {
           this.logger.error(
-            `Missing IP info for ${record.domain}. Child: ${childRelayIp}, Master: ${masterRelayIp}`,
+            `Skipping ${record.domain}: Missing IP info. ` +
+              `Relay Server IP: ${childRelayIp ?? 'NULL'}, ` +
+              `Master Relay IP: ${masterRelayIp ?? 'NULL'}`,
           );
           continue;
         }
