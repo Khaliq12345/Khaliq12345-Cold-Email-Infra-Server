@@ -213,6 +213,7 @@ export class PlusvibeService {
     this.logger.log(
       `Sending ${accountsToProcess.length} accounts to PlusVibe API`,
     );
+    this.logger.log(accountsToProcess);
 
     const credential = await this.getPlusVibeCredentials(domain, username);
     const instance = axios.create({

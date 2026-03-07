@@ -18,14 +18,14 @@ export class PlusvibeConsumer extends WorkerHost {
     switch (job.name) {
       case 'add-mailboxes-to-workspace': {
         // 2. Loop through domains and call your service function
-        for (const item of domains) {
+        for (const item of domains.slice(0, 2)) {
           try {
             this.logger.debug(`Processing domain: ${item.domain}`);
 
             // Note: Using masterDomain as the mailserverHost as per common setup
             await this.service.sendMailboxesToWorkspace(
               item.domain,
-              (item.master_mail_servers as any).domain,
+              item.master_mail_servers,
               item.username,
               workspaceId,
             );
@@ -35,7 +35,7 @@ export class PlusvibeConsumer extends WorkerHost {
             );
           } catch (err) {
             this.logger.error(
-              `Failed to add ${item.domain} to Plusvibe: ${err.message}`,
+              `Failed to add ${item.domain} to Plusvibe: ${err}`,
             );
           }
         }
