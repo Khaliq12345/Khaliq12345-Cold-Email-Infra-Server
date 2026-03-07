@@ -166,7 +166,7 @@ export class PlusvibeService {
       .from('mailboxes')
       .select('*')
       .eq('domain', domain)
-      .is('is_active', true)
+      // .is('is_active', true)
       .or('added_to_plusvibe.eq.false,added_to_plusvibe.is.null');
 
     if (error) {
