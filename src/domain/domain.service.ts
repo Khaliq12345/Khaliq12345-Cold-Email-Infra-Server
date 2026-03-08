@@ -48,34 +48,67 @@ export class DomainService {
     username: string,
     page: number = 1,
     limit: number = 20,
+    filters: {
+      domain?: string;
+      hasPlusvibe?: boolean;
+      mailboxesCount?: number;
+      order?: string;
+    } = {},
   ) {
     const client = this.service.SupabaseClient();
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
-    const { data, error, count } = await client
+
+    // 1. Initialize the Base Query
+    let query = client
       .from('domains')
       .select('*, mailboxes(count)', { count: 'exact' })
-      .eq('username', username)
-      // .eq('mailboxes.is_active', true)
-      .order('created_at', { ascending: false })
-      .range(from, to);
+      .eq('username', username);
+
+    // 2. Apply Filters
+
+    // Filter by Domain (Partial match / Case-insensitive)
+    if (filters.domain) {
+      query = query.ilike('domain', `%${filters.domain}%`);
+    }
+
+    // Filter by PlusVibe Workspace (Is not null)
+    if (filters.hasPlusvibe !== undefined) {
+      if (filters.hasPlusvibe) {
+        query = query.not('plusvibe_workspace', 'is', null);
+      }
+    }
+
+    if (filters.order == 'desc') {
+      query = query.order('created_at', { ascending: false });
+    } else {
+      query = query.order('created_at', { ascending: true });
+    }
+
+    // 3. Apply Ordering and Range (Pagination)
+    const { data, error, count } = await query.range(from, to);
 
     if (error) {
       this.logger.error(`Error fetching domains for user: ${error.message}`);
       throw error;
     }
 
-    // 2. Map the data to REMOVE the "mailboxes" array and replace with a number
-    const formattedData = data.map((item) => {
-      // Extract the count and remove the original mailboxes key
+    // 4. Map and Format Data
+    let formattedData = data.map((item) => {
       const { mailboxes, ...domainData } = item;
-
       return {
         ...domainData,
-        total_active_mailboxes: mailboxes?.[0]?.count || 0,
+        total_mailboxes: (mailboxes as any)?.[0]?.count || 0,
       };
     });
+
+    // Apply the mailboxes filter after mapping
+    if (filters.mailboxesCount !== undefined) {
+      formattedData = formattedData.filter(
+        (item) => item.total_mailboxes === filters.mailboxesCount,
+      );
+    }
 
     // 3. Return the cleaned object
     return {

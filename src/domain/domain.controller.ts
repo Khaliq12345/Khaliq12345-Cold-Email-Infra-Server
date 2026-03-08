@@ -30,6 +30,10 @@ export class DomainController {
     @Request() req: any,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('domain') domain?: string,
+    @Query('order') order?: string,
+    @Query('hasPlusvibe') hasPlusvibe?: boolean,
+    @Query('mailboxesCount') mailboxesCount?: number,
   ) {
     try {
       const username = req.user.user_metadata.username;
@@ -42,6 +46,12 @@ export class DomainController {
         username,
         pageNumber,
         limitNumber,
+        {
+          domain: domain,
+          order: order,
+          hasPlusvibe: hasPlusvibe,
+          mailboxesCount: mailboxesCount,
+        },
       );
     } catch (error) {
       throw new InternalServerErrorException('Could not retrieve domains');
