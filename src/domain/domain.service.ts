@@ -83,8 +83,15 @@ export class DomainService {
     }
 
     // Filter by PlusVibe Workspace (Is not null)
-    if (filters.platform === 'plusvibe') {
-      query = query.not('plusvibe_workspace', 'is', null);
+    if (filters.platform !== undefined && filters.platform !== null) {
+      if (filters.platform === 'plusvibe') {
+        // Show only domains linked to PlusVibe
+        query = query.not('plusvibe_workspace', 'is', null);
+      } else if (filters.platform === 'no_platform') {
+        // Show only domains NOT linked to PlusVibe
+        query = query.is('plusvibe_workspace', null);
+        // once you have more than one platform we start change .eq to .or (if you know what I mean)
+      }
     }
 
     if (filters.order == 'desc') {
