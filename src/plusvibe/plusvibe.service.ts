@@ -164,13 +164,12 @@ export class PlusvibeService {
     const { apiKey } = await this.getPlusVibeCredentials(username);
     const client = this.getPlusVibeClient(apiKey);
 
-    // 1. Update domain workspace_id and set status to SENDING
+    // 1. Update domain workspace_id
     const { error: plusvibeUpdateError } = await this.sharedService
       .SupabaseClient()
       .from('domains')
       .update({
         plusvibe_workspace: workspaceId,
-        plusvibe_sync_status: 'SENDING',
       })
       .eq('domain', domain);
 
@@ -375,6 +374,7 @@ export class PlusvibeService {
 
     // ADD EACH DOMAIN AS AN INDIVIDUAL JOB
     const jobPromises = matchedDomains.map((d) => {
+      this.updateDomainSyncStatus(d.domain, 'SENDING');
       return this.queueService.add(
         'add-domain-mailboxes-to-plusvibe', // Specific name for the single domain task
         {

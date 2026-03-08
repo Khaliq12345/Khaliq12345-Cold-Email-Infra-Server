@@ -32,8 +32,9 @@ export class DomainController {
     @Query('limit') limit?: string,
     @Query('domain') domain?: string,
     @Query('order') order?: string,
-    @Query('hasPlusvibe') hasPlusvibe?: boolean,
+    @Query('platform') platform?: string,
     @Query('mailboxesCount') mailboxesCount?: number,
+    @Query('exportStatus') exportStatus?: string,
   ) {
     try {
       const username = req.user.user_metadata.username;
@@ -49,8 +50,9 @@ export class DomainController {
         {
           domain: domain,
           order: order,
-          hasPlusvibe: hasPlusvibe,
+          platform: platform,
           mailboxesCount: mailboxesCount,
+          exportStatus: exportStatus,
         },
       );
     } catch (error) {

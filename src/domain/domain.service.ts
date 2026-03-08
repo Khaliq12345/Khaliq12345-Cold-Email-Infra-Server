@@ -50,9 +50,10 @@ export class DomainService {
     limit: number = 20,
     filters: {
       domain?: string;
-      hasPlusvibe?: boolean;
+      platform?: string;
       mailboxesCount?: number;
       order?: string;
+      exportStatus?: string;
     } = {},
   ) {
     const client = this.service.SupabaseClient();
@@ -73,11 +74,17 @@ export class DomainService {
       query = query.ilike('domain', `%${filters.domain}%`);
     }
 
-    // Filter by PlusVibe Workspace (Is not null)
-    if (filters.hasPlusvibe !== undefined) {
-      if (filters.hasPlusvibe) {
-        query = query.not('plusvibe_workspace', 'is', null);
+    // Filter by PlusVibe Export Status
+    if (filters.exportStatus !== undefined) {
+      if (filters.exportStatus) {
+        query = query.eq('plusvibe_sync_status', filters.exportStatus);
+        // once you have more than one platform we start change .eq to .or (if you know what I mean)
       }
+    }
+
+    // Filter by PlusVibe Workspace (Is not null)
+    if (filters.platform === 'plusvibe') {
+      query = query.not('plusvibe_workspace', 'is', null);
     }
 
     if (filters.order == 'desc') {
