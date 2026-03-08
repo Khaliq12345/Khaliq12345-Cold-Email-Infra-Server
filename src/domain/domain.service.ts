@@ -104,9 +104,11 @@ export class DomainService {
     });
 
     // Apply the mailboxes filter after mapping
-    if (filters.mailboxesCount !== undefined) {
+    const minCount = filters.mailboxesCount;
+
+    if (minCount !== undefined && minCount !== null) {
       formattedData = formattedData.filter(
-        (item) => item.total_mailboxes === filters.mailboxesCount,
+        (item) => item.total_mailboxes >= minCount,
       );
     }
 
