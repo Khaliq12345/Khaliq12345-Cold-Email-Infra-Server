@@ -37,13 +37,31 @@ export class PlusvibeService {
 
   async updateDomainSyncStatus(
     domain: string,
-    status: 'IDLE' | 'SENDING' | 'VERIFYING',
+    status?: 'IDLE' | 'SENDING' | 'VERIFYING',
+    workspace_id?: string,
   ) {
-    await this.sharedService
+    // Construct the payload dynamically
+    const updatePayload: Record<string, any> = {};
+
+    if (status) updatePayload.plusvibe_sync_status = status;
+    if (workspace_id) updatePayload.plusvibe_workspace = workspace_id;
+
+    // If both are missing, we can skip the DB call entirely to save resources
+    if (Object.keys(updatePayload).length === 0) {
+      return;
+    }
+
+    const { error } = await this.sharedService
       .SupabaseClient()
       .from('domains')
-      .update({ plusvibe_sync_status: status })
+      .update(updatePayload)
       .eq('domain', domain);
+
+    if (error) {
+      throw new InternalServerErrorException(
+        'Domain status or workspace could not be updated',
+      );
+    }
   }
 
   async updatePlusVibeApiKey(username: string, apiKey: string) {
@@ -163,23 +181,6 @@ export class PlusvibeService {
 
     const { apiKey } = await this.getPlusVibeCredentials(username);
     const client = this.getPlusVibeClient(apiKey);
-
-    // 1. Update domain workspace_id
-    const { error: plusvibeUpdateError } = await this.sharedService
-      .SupabaseClient()
-      .from('domains')
-      .update({
-        plusvibe_workspace: workspaceId,
-      })
-      .eq('domain', domain);
-
-    // Handle database update errors
-    if (plusvibeUpdateError) {
-      this.logger.error(
-        `Failed to initialize domain sync state: ${plusvibeUpdateError.message}`,
-      );
-      throw new Error(`DB Update failed for ${domain}`);
-    }
 
     // 2. Map only the ones that aren't already in PlusVibe (Pre-check)
     const accountsToBulkAdd: any[] = [];
@@ -374,7 +375,7 @@ export class PlusvibeService {
 
     // ADD EACH DOMAIN AS AN INDIVIDUAL JOB
     const jobPromises = matchedDomains.map((d) => {
-      this.updateDomainSyncStatus(d.domain, 'SENDING');
+      this.updateDomainSyncStatus(d.domain, 'SENDING', workspaceId);
       return this.queueService.add(
         'add-domain-mailboxes-to-plusvibe', // Specific name for the single domain task
         {
